@@ -1,6 +1,6 @@
 # 标书/文件查重工具
 
-本项目是一个本地离线运行的标书/文件查重工具，支持桌面 GUI、命令行 CLI 和 Codex Skill。它可以按公司/投标单位分组导入 `.docx`、`.doc`、`.wps`、`.md` 文件，检测跨组相似文本、共享关键词/正则、重复图片，并生成可在内网离线打开的 HTML 报告。
+本项目是一个本地离线运行的标书/文件查重工具，支持桌面 GUI、命令行 CLI 和 Agent Skill。它可以按公司/投标单位分组导入 `.docx`、`.doc`、`.wps`、`.md` 文件，检测跨组相似文本、共享关键词/正则、重复图片，并生成可在内网离线打开的 HTML 报告。
 
 ## 主要功能
 
@@ -45,24 +45,26 @@ python -m checksim.cli --config examples\case.example.json --output outputs\run_
 python run_app.py
 ```
 
-## Codex Skill 安装
+## Agent Skill 安装
 
-本仓库包含 `bid-check-similarity` Skill。可通过 npx 从 GitHub 安装：
-
-```bash
-npx github:cwyalpha/bid-check-similarity
-```
-
-安装到指定目录：
+本仓库包含 `bid-check-similarity` Skill。推荐通过 npx 安装到对应 agent 的 skills 目录：
 
 ```bash
-npx github:cwyalpha/bid-check-similarity --target ./skills
+npx github:cwyalpha/bid-check-similarity --target /path/to/agent/skills
 ```
+
+如果环境变量中已经配置了 `AGENT_SKILLS_DIR`，也可以省略 `--target`：
+
+```bash
+AGENT_SKILLS_DIR=/path/to/agent/skills npx github:cwyalpha/bid-check-similarity
+```
+
+如果既不传 `--target`，也不设置 `AGENT_SKILLS_DIR`，安装器会默认写入当前命令行目录下的 `./skills`。
 
 安装完成后，根据提示安装 Python 依赖：
 
 ```bash
-python -m pip install -r ~/.codex/skills/bid-check-similarity/scripts/requirements.txt
+python -m pip install -r /path/to/agent/skills/bid-check-similarity/scripts/requirements.txt
 ```
 
 Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Linux。Windows 处理 `.doc/.wps` 时可使用 WPS/Office/LibreOffice；Linux 处理旧格式文件需要 LibreOffice `soffice`。

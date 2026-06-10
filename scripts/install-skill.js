@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 
 const SKILL_NAME = "bid-check-similarity";
@@ -48,8 +47,10 @@ function resolveTargetRoot(args) {
     }
     return path.resolve(value);
   }
-  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-  return path.join(codexHome, "skills");
+  if (process.env.AGENT_SKILLS_DIR) {
+    return path.resolve(process.env.AGENT_SKILLS_DIR);
+  }
+  return path.resolve("skills");
 }
 
 function copyRecursive(source, dest, ignoredNames = new Set()) {
@@ -74,11 +75,11 @@ function assertDirectory(dir, label) {
 }
 
 function printHelp() {
-  console.log(`Install the ${SKILL_NAME} Codex skill.`);
+  console.log(`Install the ${SKILL_NAME} agent skill.`);
   console.log("");
   console.log("Usage:");
-  console.log("  npx github:cwyalpha/bid-check-similarity");
   console.log("  npx github:cwyalpha/bid-check-similarity --target ./skills");
+  console.log("  AGENT_SKILLS_DIR=./skills npx github:cwyalpha/bid-check-similarity");
 }
 
 main();

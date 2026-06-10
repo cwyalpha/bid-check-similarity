@@ -1,7 +1,7 @@
 {
   "name": "bid-check-similarity",
   "version": "0.1.0",
-  "description": "Offline bid and document similarity checker with a Codex skill installer.",
+  "description": "Offline bid and document similarity checker with an agent skill installer.",
   "private": false,
   "bin": {
     "bid-check-similarity": "scripts/install-skill.js"
