@@ -3,30 +3,30 @@
     {
       "name": "晨星信息技术有限公司",
       "files": [
-        "C:\\Users\\cwyal\\Desktop\\web_source\\check_sim\\sample_cases\\demo_4_groups_long\\A_晨星信息技术有限公司\\晨星投标文件.docx"
+        "sample_cases/demo_4_groups_long/A_晨星信息技术有限公司/晨星投标文件.docx"
       ]
     },
     {
       "name": "凌云数据服务有限公司",
       "files": [
-        "C:\\Users\\cwyal\\Desktop\\web_source\\check_sim\\sample_cases\\demo_4_groups_long\\B_凌云数据服务有限公司\\凌云投标文件.docx"
+        "sample_cases/demo_4_groups_long/B_凌云数据服务有限公司/凌云投标文件.docx"
       ]
     },
     {
       "name": "北辰软件工程有限公司",
       "files": [
-        "C:\\Users\\cwyal\\Desktop\\web_source\\check_sim\\sample_cases\\demo_4_groups_long\\C_北辰软件工程有限公司\\北辰投标文件.docx"
+        "sample_cases/demo_4_groups_long/C_北辰软件工程有限公司/北辰投标文件.docx"
       ]
     },
     {
       "name": "青禾数字科技有限公司",
       "files": [
-        "C:\\Users\\cwyal\\Desktop\\web_source\\check_sim\\sample_cases\\demo_4_groups_long\\D_青禾数字科技有限公司\\青禾投标文件.md"
+        "sample_cases/demo_4_groups_long/D_青禾数字科技有限公司/青禾投标文件.md"
       ]
     }
   ],
   "exclude_files": [
-    "C:\\Users\\cwyal\\Desktop\\web_source\\check_sim\\sample_cases\\demo_4_groups_long\\招标文件.docx"
+    "sample_cases/demo_4_groups_long/招标文件.docx"
   ],
   "keywords": [
     "华远智联科技有限公司",

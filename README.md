@@ -23,6 +23,10 @@
 运行后按界面步骤操作：
 
 1. 添加至少 2 个投标文件分组。
+   - “添加文件组”：一次选择同一家公司的一批文件。
+   - “按目录添加组”：选择一个公司目录，递归导入该公司文件。
+   - “批量单文件成组”：一次选择多个文件，每个文件自动作为一个公司/分组。
+   - “批量文件夹成组”：选择包含多个公司文件夹的上级目录，每个直接子文件夹及其子目录自动作为一个公司/分组。
 2. 可选添加排除文件 B。
 3. 可选填写关键词或正则规则。
 4. 调整短文本过滤、相似度阈值、分段符号等参数。
@@ -116,7 +120,7 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Lin
 运行测试：
 
 ```powershell
-C:\Users\cwyal\anaconda3\envs\checksim_py38\python.exe -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 ```
 
 构建 Windows 单文件 exe：

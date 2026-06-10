@@ -126,6 +126,11 @@ class CheckSimApp(ttk.Frame):
         ttk.Button(buttons, text="重命名", command=self._rename_group).pack(side=LEFT, padx=(0, 6))
         ttk.Button(buttons, text="删除选中组", command=self._remove_group).pack(side=LEFT)
 
+        batch_buttons = ttk.Frame(frame)
+        batch_buttons.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Button(batch_buttons, text="批量单文件成组", command=self._add_single_file_groups).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(batch_buttons, text="批量文件夹成组", command=self._add_parent_folder_groups).pack(side=LEFT)
+
     def _build_excludes(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="2. 可选排除文件 B")
         frame.pack(fill="both", expand=False, pady=(0, 8))
@@ -199,8 +204,11 @@ class CheckSimApp(ttk.Frame):
         name = simpledialog.askstring("分组名称", "请输入公司/分组名称", initialvalue=default_name, parent=self.master)
         if not name:
             return
-        self.groups.append({"name": name.strip(), "files": [normalize_path(file) for file in files]})
-        self._refresh_groups()
+        added, skipped = self._append_groups([{"name": name.strip(), "files": list(files)}])
+        if skipped:
+            messagebox.showinfo("未重复添加", "相同文件组成的分组已存在，本次没有重复添加。")
+        elif added:
+            self._refresh_groups()
 
     def _add_folder_group(self) -> None:
         folder = filedialog.askdirectory(title="选择一个公司的投标文件目录")
@@ -214,8 +222,79 @@ class CheckSimApp(ttk.Frame):
         name = simpledialog.askstring("分组名称", "请输入公司/分组名称", initialvalue=folder_path.name, parent=self.master)
         if not name:
             return
-        self.groups.append({"name": name.strip(), "files": [normalize_path(file) for file in files]})
-        self._refresh_groups()
+        added, skipped = self._append_groups([{"name": name.strip(), "files": files}])
+        if skipped:
+            messagebox.showinfo("未重复添加", "相同文件组成的分组已存在，本次没有重复添加。")
+        elif added:
+            self._refresh_groups()
+
+    def _add_single_file_groups(self) -> None:
+        files = filedialog.askopenfilenames(
+            title="批量选择投标文件，每个文件自动作为一个公司/分组",
+            filetypes=SUPPORTED_FILETYPES,
+        )
+        if not files:
+            return
+        groups = _groups_from_single_files(files)
+        added, skipped = self._append_groups(groups)
+        if added:
+            self._refresh_groups()
+            message = f"已按单文件模式添加 {added} 个分组。"
+            if skipped:
+                message += f"\n跳过 {skipped} 个已存在的重复分组。"
+            messagebox.showinfo("批量添加完成", message)
+        else:
+            messagebox.showwarning("未添加分组", "没有新增分组，所选文件可能已经添加过。")
+
+    def _add_parent_folder_groups(self) -> None:
+        proceed = messagebox.askokcancel(
+            "批量文件夹成组",
+            "请选择“包含多个公司文件夹的上级目录”。\n\n"
+            "程序会把该目录下的每个直接子文件夹作为一个公司/分组，"
+            "并递归导入子文件夹中的 .docx、.doc、.wps、.md 文件。\n\n"
+            "如果只想添加某一家公司的单个目录，请使用“按目录添加组”。",
+            parent=self.master,
+        )
+        if not proceed:
+            return
+        folder = filedialog.askdirectory(title="选择包含多个公司文件夹的上级目录")
+        if not folder:
+            return
+        groups, empty_folders = _groups_from_company_folders(Path(folder))
+        if not groups:
+            messagebox.showwarning("未找到文件", "该目录的直接子文件夹中没有 .docx、.doc、.wps 或 .md 文件。")
+            return
+        added, skipped = self._append_groups(groups)
+        if added:
+            self._refresh_groups()
+            message = f"已按文件夹模式添加 {added} 个分组。"
+            if skipped:
+                message += f"\n跳过 {skipped} 个已存在的重复分组。"
+            if empty_folders:
+                message += f"\n另有 {len(empty_folders)} 个子文件夹未找到支持文件，已跳过。"
+            messagebox.showinfo("批量添加完成", message)
+        else:
+            messagebox.showwarning("未添加分组", "没有新增分组，所选子文件夹可能已经添加过。")
+
+    def _append_groups(self, groups: list[dict[str, object]]) -> tuple[int, int]:
+        existing_names = {str(group["name"]) for group in self.groups}
+        existing_signatures = {_group_file_signature(group) for group in self.groups}
+        added = 0
+        skipped = 0
+        for group in groups:
+            files = [normalize_path(file) for file in group.get("files", [])]  # type: ignore[arg-type]
+            if not files:
+                continue
+            signature = tuple(sorted(files))
+            if signature in existing_signatures:
+                skipped += 1
+                continue
+            name = _unique_group_name(str(group.get("name") or f"公司{len(self.groups) + 1}"), existing_names)
+            self.groups.append({"name": name, "files": files})
+            existing_names.add(name)
+            existing_signatures.add(signature)
+            added += 1
+        return added, skipped
 
     def _rename_group(self) -> None:
         selected = self.group_tree.selection()
@@ -419,13 +498,58 @@ def _find_supported_files(folder: Path) -> list[str]:
     return sorted(files)
 
 
+def _groups_from_single_files(paths: list[str] | tuple[str, ...]) -> list[dict[str, object]]:
+    files = sorted({normalize_path(path) for path in paths})
+    stems: dict[str, int] = {}
+    for file in files:
+        stems[Path(file).stem] = stems.get(Path(file).stem, 0) + 1
+
+    groups: list[dict[str, object]] = []
+    for file in files:
+        path = Path(file)
+        name = path.stem
+        if stems.get(path.stem, 0) > 1:
+            name = f"{path.parent.name}_{path.stem}"
+        groups.append({"name": name, "files": [file]})
+    return groups
+
+
+def _groups_from_company_folders(parent: Path) -> tuple[list[dict[str, object]], list[str]]:
+    groups: list[dict[str, object]] = []
+    empty_folders: list[str] = []
+    for folder in sorted((path for path in parent.iterdir() if path.is_dir()), key=lambda path: path.name.lower()):
+        files = _find_supported_files(folder)
+        if files:
+            groups.append({"name": folder.name, "files": files})
+        else:
+            empty_folders.append(folder.name)
+    return groups, empty_folders
+
+
+def _unique_group_name(name: str, existing_names: set[str]) -> str:
+    base = name.strip() or "未命名分组"
+    if base not in existing_names:
+        return base
+    index = 2
+    while f"{base}({index})" in existing_names:
+        index += 1
+    return f"{base}({index})"
+
+
+def _group_file_signature(group: dict[str, object]) -> tuple[str, ...]:
+    files = group.get("files", [])
+    if not isinstance(files, list):
+        return tuple()
+    return tuple(sorted(normalize_path(str(file)) for file in files))
+
+
 def _help_text() -> str:
     return "\n".join(
         [
             "标书/文件查重工具操作教程",
             "",
             "一、准备文件",
-            "1. 每家公司的投标文件放到一个文件夹，或在添加文件组时一次选择同一公司的多个文件。",
+            "1. 每家公司的投标文件可以单独成一个文件，也可以放到一个文件夹。",
             "2. 支持 .docx、.doc、.wps、.md；Markdown 附带的本地图片会参与图片重复检测。",
             "3. .doc/.wps 不会直接改原文件，程序会先转成临时 .docx 再解析。",
             "4. Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试转换；Linux/macOS 下使用 LibreOffice。",
@@ -434,8 +558,11 @@ def _help_text() -> str:
             "二、添加投标文件分组",
             "1. 点击“添加文件组”，选择某一家公司的一批文件，然后输入公司/分组名称。",
             "2. 点击“按目录添加组”，可以直接选择一个公司目录，程序会递归查找支持的文件。",
-            "3. 至少需要 2 个公司/分组才可以开始检测。",
-            "4. 同一组内的文件不会互相比对，只会和其他公司/分组比对。",
+            "3. 点击“批量单文件成组”，可以一次选择多个文件；每个文件会自动成为一个公司/分组。",
+            "4. 点击“批量文件夹成组”，选择包含多个公司文件夹的上级目录；每个直接子文件夹及其子目录会自动成为一个公司/分组。",
+            "5. 批量导入时，分组名会优先使用文件名或文件夹名；如重名会自动追加序号，导入后仍可重命名。",
+            "6. 至少需要 2 个公司/分组才可以开始检测。",
+            "7. 同一组内的文件不会互相比对，只会和其他公司/分组比对。",
             "",
             "三、添加可选排除文件 B",
             "1. 排除文件适合放招标文件、模板、统一格式要求等允许各家共同引用的材料。",

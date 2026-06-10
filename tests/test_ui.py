@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import tkinter as tk
 
-from checksim.ui import CheckSimApp
+from checksim.ui import CheckSimApp, _groups_from_company_folders, _groups_from_single_files
 
 
 class CheckSimUiTest(unittest.TestCase):
@@ -29,7 +31,44 @@ class CheckSimUiTest(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_groups_from_single_files_creates_one_group_per_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "A公司投标文件.docx"
+            second_dir = root / "B公司"
+            second_dir.mkdir()
+            second = second_dir / "A公司投标文件.md"
+            first.write_text("a", encoding="utf-8")
+            second.write_text("b", encoding="utf-8")
+
+            groups = _groups_from_single_files((str(first), str(second)))
+
+        self.assertEqual(len(groups), 2)
+        self.assertEqual([len(group["files"]) for group in groups], [1, 1])
+        self.assertEqual(
+            set(group["name"] for group in groups),
+            {"B公司_A公司投标文件", f"{root.name}_A公司投标文件"},
+        )
+
+    def test_groups_from_company_folders_uses_each_child_folder_as_group(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            company_a = root / "A公司"
+            company_a_nested = company_a / "技术部分"
+            company_a_nested.mkdir(parents=True)
+            company_b = root / "B公司"
+            company_b.mkdir()
+            empty = root / "空目录"
+            empty.mkdir()
+            (company_a_nested / "投标文件.docx").write_text("a", encoding="utf-8")
+            (company_b / "响应文件.wps").write_text("b", encoding="utf-8")
+
+            groups, empty_folders = _groups_from_company_folders(root)
+
+        self.assertEqual([group["name"] for group in groups], ["A公司", "B公司"])
+        self.assertEqual([len(group["files"]) for group in groups], [1, 1])
+        self.assertEqual(empty_folders, ["空目录"])
+
 
 if __name__ == "__main__":
     unittest.main()
-
