@@ -1,0 +1,20 @@
+{
+  "name": "bid-check-similarity",
+  "version": "0.1.0",
+  "description": "Offline bid and document similarity checker with a Codex skill installer.",
+  "private": false,
+  "bin": {
+    "bid-check-similarity": "scripts/install-skill.js"
+  },
+  "files": [
+    "checksim/*.py",
+    "skills/bid-check-similarity",
+    "scripts/install-skill.js",
+    "README.md",
+    "requirements-win38.txt"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT"
+}

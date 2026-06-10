@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+build/
+dist/
+release/
+outputs/
+sample_cases/**/outputs/
+*.spec
+
+video_frames/
+tocheck.mp4

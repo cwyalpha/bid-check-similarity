@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+outputs/
+sample_cases/**/outputs/
+video_frames/
+tocheck.mp4
+*.spec

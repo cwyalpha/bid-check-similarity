@@ -1,0 +1,662 @@
+from __future__ import annotations
+
+import json
+from html import escape
+from pathlib import Path
+from typing import Any
+
+from .text import highlight_common
+
+
+def write_report_bundle(result: dict[str, Any], output_dir: str | Path) -> dict[str, Any]:
+    output = Path(output_dir).expanduser().resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    result_path = output / "result.json"
+    report_path = output / "report.html"
+    compare_pages = _write_compare_pages(result, output)
+    paths = {
+        "result_json": str(result_path),
+        "report_html": str(report_path),
+        "output_dir": str(output),
+        "compare_pages": compare_pages,
+    }
+    result["output_files"] = paths
+    result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_path.write_text(render_report(result), encoding="utf-8")
+    return paths
+
+
+def render_report(result: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="zh-CN">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            "<title>文件查重报告</title>",
+            f"<style>{_css()}</style>",
+            "</head>",
+            "<body>",
+            _header(result),
+            '<main class="page">',
+            _stats(result),
+            _options(result),
+            _pair_summary(result),
+            _keyword_section(result),
+            _image_section(result),
+            _match_details(result),
+            "</main>",
+            f"<script>{_js()}</script>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _header(result: dict[str, Any]) -> str:
+    stats = result.get("stats", {})
+    return f"""
+<header class="hero">
+  <div>
+    <h1>文件查重报告</h1>
+    <p>生成时间：{escape(result.get("generated_at", ""))}</p>
+  </div>
+  <div class="hero-score">
+    <strong>{stats.get("similar_match_count", 0)}</strong>
+    <span>异常相似片段</span>
+  </div>
+</header>
+"""
+
+
+def _stats(result: dict[str, Any]) -> str:
+    stats = result.get("stats", {})
+    items = [
+        ("投标组数", stats.get("group_count", 0)),
+        ("投标文件", stats.get("document_count", 0)),
+        ("可比片段", stats.get("comparable_unit_count", 0)),
+        ("短文本过滤", stats.get("short_filtered_unit_count", 0)),
+        ("排除命中", stats.get("excluded_match_count", 0)),
+        ("关键词异常", stats.get("keyword_alert_count", 0)),
+        ("图片重复", stats.get("image_duplicate_count", 0)),
+    ]
+    cards = "".join(f'<div class="stat"><b>{escape(str(value))}</b><span>{escape(label)}</span></div>' for label, value in items)
+    return f'<section class="stats">{cards}</section>'
+
+
+def _options(result: dict[str, Any]) -> str:
+    options = result.get("options", {})
+    rows = [
+        ("中文/混合短文本过滤", f"少于 {options.get('min_chars')} 个可见字符不参与相似度比对"),
+        ("英文短文本过滤", f"少于 {options.get('min_words')} 个英文词不参与相似度比对"),
+        ("文本相似阈值", options.get("similarity_threshold")),
+        ("排除文件阈值", options.get("exclude_threshold")),
+        ("强分段符号", options.get("sentence_delimiters")),
+        ("长句辅助切分符号", options.get("soft_delimiters")),
+        ("图片近似阈值", f"aHash 汉明距离 <= {options.get('image_ahash_distance')}"),
+    ]
+    body = "".join(f"<tr><th>{escape(str(name))}</th><td>{escape(str(value))}</td></tr>" for name, value in rows)
+    return f"""
+<section class="panel">
+  <h2>检测参数</h2>
+  <table class="meta-table"><tbody>{body}</tbody></table>
+</section>
+"""
+
+
+def _pair_summary(result: dict[str, Any]) -> str:
+    rows = []
+    compare_links = {
+        (page.get("group_a"), page.get("group_b")): page.get("file_name")
+        for page in result.get("output_files", {}).get("compare_pages", [])
+    }
+    for index, item in enumerate(result.get("pair_summaries", []), start=1):
+        pair_id = _pair_id(item["group_a"], item["group_b"])
+        compare_file = compare_links.get((item["group_a"], item["group_b"]))
+        compare_link = f" | <a href='{escape(str(compare_file))}'>左右对照</a>" if compare_file else ""
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td>{escape(item['group_a'])}</td>"
+            f"<td>{escape(item['group_b'])}</td>"
+            f"<td class='num danger'>{item['match_count']}</td>"
+            f"<td class='num muted'>{item['excluded_count']}</td>"
+            f"<td class='num'>{_percent(item['max_similarity'])}</td>"
+            f"<td class='num'>{_percent(item['avg_similarity'])}</td>"
+            f"<td><a href='#{pair_id}'>查看明细</a>{compare_link}</td>"
+            "</tr>"
+        )
+    body = "".join(rows) or "<tr><td colspan='8' class='empty'>未发现超过阈值的跨组相似片段。</td></tr>"
+    return f"""
+<section class="panel">
+  <div class="panel-title">
+    <h2>两两比对总览</h2>
+    <label class="toggle"><input type="checkbox" id="showExcluded"> 显示已排除片段</label>
+  </div>
+  <table>
+    <thead><tr><th>序号</th><th>组1</th><th>组2</th><th>异常片段</th><th>已排除</th><th>最高相似度</th><th>平均相似度</th><th>操作</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+</section>
+"""
+
+
+def _keyword_section(result: dict[str, Any]) -> str:
+    alerts = result.get("keyword_alerts", [])
+    rows = []
+    for index, alert in enumerate(alerts, start=1):
+        hits = alert.get("hits", [])
+        samples = "<br>".join(
+            f"{escape(hit.get('group_name', ''))} / {escape(hit.get('file_name', ''))}: {escape(hit.get('snippet', ''))}"
+            for hit in hits[:5]
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td>{escape(alert.get('keyword', ''))}</td>"
+            f"<td>{'正则' if alert.get('is_regex') else '关键词'}</td>"
+            f"<td>{escape(', '.join(alert.get('groups', [])))}</td>"
+            f"<td>{len(hits)}</td>"
+            f"<td class='snippet'>{samples}</td>"
+            "</tr>"
+        )
+    body = "".join(rows) or "<tr><td colspan='6' class='empty'>未发现跨 2 组以上的重要关键词异常。</td></tr>"
+    errors = result.get("keyword_errors") or []
+    error_html = ""
+    if errors:
+        error_html = "<p class='warn'>正则错误：" + "；".join(escape(error) for error in errors) + "</p>"
+    return f"""
+<section class="panel">
+  <h2>重要关键词异常</h2>
+  {error_html}
+  <table>
+    <thead><tr><th>序号</th><th>规则</th><th>类型</th><th>命中组</th><th>命中数</th><th>样例</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+</section>
+"""
+
+
+def _image_section(result: dict[str, Any]) -> str:
+    rows = []
+    for index, duplicate in enumerate(result.get("image_duplicates", []), start=1):
+        images = duplicate.get("images", [])
+        detail = "<br>".join(
+            f"{escape(image.get('group_name', ''))} / {escape(image.get('file_name', ''))} / {escape(image.get('image_id', ''))}"
+            for image in images
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td>{escape(duplicate.get('kind', ''))}</td>"
+            f"<td>{duplicate.get('distance', 0)}</td>"
+            f"<td>{detail}</td>"
+            "</tr>"
+        )
+    body = "".join(rows) or "<tr><td colspan='4' class='empty'>未发现跨组重复图片。</td></tr>"
+    return f"""
+<section class="panel">
+  <h2>图片重复</h2>
+  <table>
+    <thead><tr><th>序号</th><th>类型</th><th>距离</th><th>图片位置</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+</section>
+"""
+
+
+def _match_details(result: dict[str, Any]) -> str:
+    matches = result.get("matches", [])
+    by_pair: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for match in matches:
+        by_pair.setdefault((match["group_a"], match["group_b"]), []).append(match)
+    sections = []
+    for summary in result.get("pair_summaries", []):
+        pair = (summary["group_a"], summary["group_b"])
+        pair_matches = by_pair.get(pair, [])
+        sections.append(
+            f"<section class='panel detail' id='{_pair_id(*pair)}'>"
+            f"<h2>{escape(pair[0])} VS {escape(pair[1])}</h2>"
+            + _match_cards(pair_matches)
+            + "</section>"
+        )
+    return "\n".join(sections)
+
+
+def _match_cards(matches: list[dict[str, Any]]) -> str:
+    if not matches:
+        return "<p class='empty'>该组组合未发现相似片段。</p>"
+    cards = []
+    for match in matches:
+        left, right = highlight_common(match.get("text_a", ""), match.get("text_b", ""))
+        excluded_class = " excluded" if match.get("excluded") else ""
+        reason = f"<p class='reason'>{escape(match.get('exclude_reason') or '')}</p>" if match.get("excluded") else ""
+        status_badge = "<em>已排除</em>" if match.get("excluded") else '<em class="risk">异常</em>'
+        cards.append(
+            f"<article class='match-card{excluded_class}'>"
+            "<div class='match-head'>"
+            f"<span>{escape(match.get('match_id', ''))}</span>"
+            f"<b>{_percent(match.get('similarity', 0))}</b>"
+            f"{status_badge}"
+            "</div>"
+            f"{reason}"
+            "<div class='compare'>"
+            "<div>"
+            f"<h3>{escape(Path(match.get('file_a', '')).name)} · {escape(match.get('location_a', ''))}</h3>"
+            f"<p>{left}</p>"
+            "</div>"
+            "<div>"
+            f"<h3>{escape(Path(match.get('file_b', '')).name)} · {escape(match.get('location_b', ''))}</h3>"
+            f"<p>{right}</p>"
+            "</div>"
+            "</div>"
+            "</article>"
+        )
+    return "\n".join(cards)
+
+
+def _write_compare_pages(result: dict[str, Any], output: Path) -> list[dict[str, Any]]:
+    by_pair: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for match in result.get("matches", []):
+        by_pair.setdefault((match["group_a"], match["group_b"]), []).append(match)
+
+    pages: list[dict[str, Any]] = []
+    used_names: set[str] = set()
+    for summary in result.get("pair_summaries", []):
+        pair = (summary["group_a"], summary["group_b"])
+        pair_matches = by_pair.get(pair, [])
+        if not pair_matches:
+            continue
+        file_name = _unique_compare_filename(pair[0], pair[1], used_names)
+        page_path = output / file_name
+        page_path.write_text(render_compare_page(result, pair[0], pair[1], pair_matches), encoding="utf-8")
+        pages.append(
+            {
+                "group_a": pair[0],
+                "group_b": pair[1],
+                "file_name": file_name,
+                "path": str(page_path),
+                "match_count": sum(1 for match in pair_matches if not match.get("excluded")),
+                "excluded_count": sum(1 for match in pair_matches if match.get("excluded")),
+            }
+        )
+    return pages
+
+
+def render_compare_page(result: dict[str, Any], group_a: str, group_b: str, matches: list[dict[str, Any]]) -> str:
+    documents = result.get("documents", [])
+    left_docs = [doc for doc in documents if doc.get("group_name") == group_a]
+    right_docs = [doc for doc in documents if doc.get("group_name") == group_b]
+    left_annotations, right_annotations = _compare_annotations(matches)
+    title = f"{group_a} VS {group_b}"
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="zh-CN">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            f"<title>{escape(title)} 左右对照</title>",
+            f"<style>{_compare_css()}</style>",
+            "</head>",
+            "<body>",
+            "<header class='compare-top'>",
+            "<div>",
+            f"<h1>{escape(title)}</h1>",
+            f"<p>异常相似 {sum(1 for match in matches if not match.get('excluded'))} 处，已排除 {sum(1 for match in matches if match.get('excluded'))} 处</p>",
+            "</div>",
+            "<a href='report.html'>返回总报告</a>",
+            "</header>",
+            "<main class='compare-layout'>",
+            _compare_side("left", group_a, left_docs, left_annotations),
+            _compare_side("right", group_b, right_docs, right_annotations),
+            "</main>",
+            f"<script>{_compare_js()}</script>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _compare_annotations(matches: list[dict[str, Any]]) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+    left: dict[str, list[dict[str, Any]]] = {}
+    right: dict[str, list[dict[str, Any]]] = {}
+    for match in matches:
+        left_ref = {
+            "target_id": f"right-{match.get('unit_id_b')}",
+            "similarity": float(match.get("similarity", 0) or 0),
+            "excluded": bool(match.get("excluded")),
+            "match_id": match.get("match_id", ""),
+        }
+        right_ref = {
+            "target_id": f"left-{match.get('unit_id_a')}",
+            "similarity": float(match.get("similarity", 0) or 0),
+            "excluded": bool(match.get("excluded")),
+            "match_id": match.get("match_id", ""),
+        }
+        left.setdefault(str(match.get("unit_id_a")), []).append(left_ref)
+        right.setdefault(str(match.get("unit_id_b")), []).append(right_ref)
+    return left, right
+
+
+def _compare_side(side: str, group_name: str, documents: list[dict[str, Any]], annotations: dict[str, list[dict[str, Any]]]) -> str:
+    all_units = [unit for doc in documents for unit in doc.get("units", [])]
+    unit_positions = {unit.get("unit_id"): index for index, unit in enumerate(all_units)}
+    markers = _compare_markers(side, all_units, unit_positions, annotations)
+    docs_html = []
+    for doc in documents:
+        units = doc.get("units", [])
+        unit_html = "".join(_compare_unit(side, unit, annotations.get(unit.get("unit_id"), [])) for unit in units)
+        empty_unit_html = '<p class="empty-unit">无可展示文本</p>'
+        docs_html.append(
+            "<article class='file-block'>"
+            f"<h3>{escape(doc.get('file_name', ''))}</h3>"
+            f"{unit_html or empty_unit_html}"
+            "</article>"
+        )
+    return (
+        f"<section class='compare-side {side}' data-side='{side}'>"
+        "<div class='side-toolbar'>"
+        f"<h2>{escape(group_name)}</h2>"
+        "<div class='nav-buttons'>"
+        f"<button type='button' data-nav='prev' data-side='{side}'>上一个高亮</button>"
+        f"<button type='button' data-nav='next' data-side='{side}'>下一个高亮</button>"
+        f"<label><input type='checkbox' data-include-excluded='{side}'> 包含已排除</label>"
+        "</div>"
+        "</div>"
+        "<div class='scroll-shell'>"
+        f"<div class='marker-rail' aria-hidden='true'>{markers}</div>"
+        f"<div class='doc-stream' id='stream-{side}'>"
+        f"{''.join(docs_html)}"
+        "</div>"
+        "</div>"
+        "</section>"
+    )
+
+
+def _compare_unit(side: str, unit: dict[str, Any], refs: list[dict[str, Any]]) -> str:
+    unit_id = str(unit.get("unit_id", ""))
+    dom_id = f"{side}-{unit_id}"
+    text = escape(str(unit.get("text", "")))
+    location = escape(str(unit.get("location", "")))
+    comparable_class = "" if unit.get("comparable") else " short-unit"
+    if not refs:
+        return f"<p id='{dom_id}' class='unit{comparable_class}'><span class='loc'>{location}</span>{text}</p>"
+
+    refs = sorted(refs, key=lambda item: (item["excluded"], -item["similarity"], item["target_id"]))
+    active_refs = [ref for ref in refs if not ref["excluded"]]
+    all_excluded = not active_refs
+    score = max(ref["similarity"] for ref in refs)
+    alpha = _similarity_alpha(score, all_excluded)
+    targets = ",".join(escape(ref["target_id"]) for ref in refs)
+    match_ids = "、".join(escape(str(ref["match_id"])) for ref in refs)
+    badge = f"<span class='hit-badge'>{len(refs)}</span>" if len(refs) > 1 else ""
+    excluded_label = "<span class='excluded-label'>已排除</span>" if all_excluded else ""
+    return (
+        f"<p id='{dom_id}' class='unit hit {'hit-excluded' if all_excluded else 'hit-active'}{comparable_class}' "
+        f"data-side='{side}' data-unit-id='{escape(unit_id)}' data-targets='{targets}' data-cycle='0' data-excluded='{'1' if all_excluded else '0'}' "
+        f"style='--alpha:{alpha:.3f}; --edge:{min(0.95, alpha + 0.25):.3f}' title='{match_ids}'>"
+        f"<span class='loc'>{location}</span>{badge}{excluded_label}<span class='score'>{_percent(score)}</span>{text}"
+        "</p>"
+    )
+
+
+def _compare_markers(
+    side: str,
+    units: list[dict[str, Any]],
+    positions: dict[Any, int],
+    annotations: dict[str, list[dict[str, Any]]],
+) -> str:
+    total = max(1, len(units) - 1)
+    markers = []
+    for unit_id, refs in annotations.items():
+        if unit_id not in positions:
+            continue
+        score = max(float(ref["similarity"]) for ref in refs)
+        all_excluded = all(bool(ref["excluded"]) for ref in refs)
+        top = 0 if total == 0 else positions[unit_id] / total * 100
+        alpha = _similarity_alpha(score, all_excluded)
+        markers.append(
+            f"<button type='button' class='marker {'marker-excluded' if all_excluded else 'marker-active'}' "
+            f"data-target='{side}-{escape(unit_id)}' style='top:{top:.2f}%; --alpha:{alpha:.3f}' title='{_percent(score)}'></button>"
+        )
+    return "".join(markers)
+
+
+def _similarity_alpha(score: float, excluded: bool) -> float:
+    score = max(0.0, min(1.0, score))
+    if excluded:
+        return 0.14 + score * 0.16
+    return 0.18 + score * 0.36
+
+
+def _unique_compare_filename(group_a: str, group_b: str, used: set[str]) -> str:
+    base = _safe_filename(f"compare_{group_a}__{group_b}")[:120] or "compare"
+    name = base + ".html"
+    counter = 2
+    while name in used:
+        name = f"{base}_{counter}.html"
+        counter += 1
+    used.add(name)
+    return name
+
+
+def _safe_filename(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in value.strip())
+    safe = "_".join(part for part in safe.split("_") if part)
+    return safe
+
+
+def _compare_css() -> str:
+    return """
+:root { color-scheme: light; --bg:#f5f7fb; --panel:#fff; --text:#1d2433; --muted:#697386; --line:#d8dee9; --active:#d92d20; --excluded:#667085; }
+* { box-sizing:border-box; }
+body { margin:0; font:14px/1.65 "Microsoft YaHei", "Segoe UI", Arial, sans-serif; color:var(--text); background:var(--bg); overflow:hidden; }
+.compare-top { height:76px; display:flex; justify-content:space-between; align-items:center; gap:20px; padding:12px 20px; background:#133b5c; color:white; }
+.compare-top h1 { margin:0; font-size:20px; letter-spacing:0; }
+.compare-top p { margin:2px 0 0; color:#dbe7f4; }
+.compare-top a { color:white; border:1px solid rgba(255,255,255,.42); border-radius:6px; padding:6px 12px; text-decoration:none; }
+.compare-layout { display:grid; grid-template-columns:1fr 1fr; gap:12px; height:calc(100vh - 76px); padding:12px; }
+.compare-side { min-width:0; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.side-toolbar { min-height:58px; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; border-bottom:1px solid var(--line); background:#f7f9fc; }
+.side-toolbar h2 { margin:0; font-size:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.nav-buttons { display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+button { font:inherit; border:1px solid #b8c2d1; background:white; border-radius:6px; padding:4px 9px; cursor:pointer; }
+button:hover { border-color:#7c8da6; background:#f8fafc; }
+label { color:var(--muted); user-select:none; white-space:nowrap; }
+.scroll-shell { position:relative; flex:1; min-height:0; display:flex; }
+.marker-rail { position:relative; flex:0 0 16px; margin:10px 0 10px 8px; border-radius:999px; background:#eef2f7; border:1px solid #d9e1ec; }
+.marker { position:absolute; left:2px; width:10px; height:7px; margin-top:-3px; border:0; border-radius:999px; padding:0; opacity:.95; }
+.marker-active { background:rgba(217,45,32,var(--alpha)); }
+.marker-excluded { background:rgba(102,112,133,var(--alpha)); }
+.doc-stream { flex:1; min-width:0; overflow-y:auto; padding:12px 14px 32px; scroll-behavior:smooth; }
+.file-block { border:1px solid var(--line); border-radius:8px; margin:0 0 12px; overflow:hidden; background:white; }
+.file-block h3 { margin:0; padding:8px 10px; font-size:13px; color:#3a4557; background:#f0f3f8; border-bottom:1px solid var(--line); }
+.unit { position:relative; margin:0; padding:9px 10px 9px 82px; border-bottom:1px solid #edf1f6; white-space:pre-wrap; word-break:break-word; transition:box-shadow .18s, outline-color .18s; }
+.unit:last-child { border-bottom:0; }
+.unit.short-unit { color:#6b7280; }
+.loc { position:absolute; left:10px; top:9px; width:58px; color:#8a94a6; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hit { cursor:pointer; border-left:4px solid rgba(217,45,32,var(--edge)); }
+.hit-active { background:rgba(217,45,32,var(--alpha)); }
+.hit-excluded { background:rgba(102,112,133,var(--alpha)); border-left-color:rgba(102,112,133,var(--edge)); }
+.hit-badge, .score, .excluded-label { display:inline-block; margin-right:6px; padding:0 6px; border-radius:999px; font-size:12px; line-height:1.6; background:rgba(255,255,255,.72); color:#344054; }
+.score { color:#7a271a; }
+.hit-excluded .score { color:#344054; }
+.excluded-label { color:#475467; }
+.flash { outline:3px solid #1570ef; outline-offset:-3px; box-shadow:0 0 0 4px rgba(21,112,239,.18) inset; }
+.empty-unit { margin:0; padding:14px; color:var(--muted); }
+@media (max-width: 920px) {
+  body { overflow:auto; }
+  .compare-layout { grid-template-columns:1fr; height:auto; }
+  .compare-side { height:70vh; }
+}
+@media print {
+  body { overflow:auto; background:white; }
+  .compare-top { position:static; color:#111; background:white; border-bottom:1px solid var(--line); }
+  .compare-top a, .nav-buttons, .marker-rail { display:none; }
+  .compare-layout { display:block; height:auto; }
+  .compare-side { margin-bottom:14px; break-inside:avoid; }
+  .doc-stream { overflow:visible; }
+}
+"""
+
+
+def _compare_js() -> str:
+    return """
+const navState = { left: -1, right: -1 };
+
+function streamFor(side) {
+  return document.getElementById('stream-' + side);
+}
+
+function scrollToElement(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const stream = el.closest('.doc-stream');
+  if (!stream) return;
+  const er = el.getBoundingClientRect();
+  const sr = stream.getBoundingClientRect();
+  const top = stream.scrollTop + (er.top - sr.top) - (stream.clientHeight / 2) + (el.offsetHeight / 2);
+  stream.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  el.classList.remove('flash');
+  void el.offsetWidth;
+  el.classList.add('flash');
+  window.setTimeout(() => el.classList.remove('flash'), 950);
+}
+
+function hitElements(side, includeExcluded) {
+  const stream = streamFor(side);
+  if (!stream) return [];
+  const selector = includeExcluded ? '.hit' : '.hit:not(.hit-excluded)';
+  return Array.from(stream.querySelectorAll(selector));
+}
+
+function setNavStateFromId(side, id) {
+  const include = document.querySelector(`[data-include-excluded="${side}"]`)?.checked || false;
+  const hits = hitElements(side, include);
+  const idx = hits.findIndex((el) => el.id === id);
+  if (idx >= 0) navState[side] = idx;
+}
+
+document.addEventListener('click', (event) => {
+  const marker = event.target.closest('.marker');
+  if (marker) {
+    const target = marker.dataset.target;
+    if (target) {
+      scrollToElement(target);
+      setNavStateFromId(target.startsWith('left-') ? 'left' : 'right', target);
+    }
+    return;
+  }
+
+  const nav = event.target.closest('[data-nav]');
+  if (nav) {
+    const side = nav.dataset.side;
+    const include = document.querySelector(`[data-include-excluded="${side}"]`)?.checked || false;
+    const hits = hitElements(side, include);
+    if (!hits.length) return;
+    const delta = nav.dataset.nav === 'prev' ? -1 : 1;
+    navState[side] = (navState[side] + delta + hits.length) % hits.length;
+    scrollToElement(hits[navState[side]].id);
+    return;
+  }
+
+  const hit = event.target.closest('.hit');
+  if (!hit) return;
+  const targets = (hit.dataset.targets || '').split(',').filter(Boolean);
+  if (!targets.length) return;
+  const index = Number(hit.dataset.cycle || '0') % targets.length;
+  hit.dataset.cycle = String(index + 1);
+  scrollToElement(targets[index]);
+  setNavStateFromId(hit.dataset.side || '', hit.id);
+});
+
+document.addEventListener('change', (event) => {
+  const checkbox = event.target.closest('[data-include-excluded]');
+  if (checkbox) {
+    navState[checkbox.dataset.includeExcluded] = -1;
+  }
+});
+"""
+
+
+def _pair_id(left: str, right: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "-" for ch in f"{left}-{right}")
+    return "pair-" + safe.strip("-")
+
+
+def _percent(value: Any) -> str:
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "0.0%"
+
+
+def _css() -> str:
+    return """
+:root { color-scheme: light; --bg:#f5f7fb; --panel:#fff; --text:#1d2433; --muted:#697386; --line:#d8dee9; --accent:#0f8f72; --danger:#c92a2a; --mark:#fff3a3; }
+* { box-sizing: border-box; }
+body { margin:0; font:14px/1.6 "Microsoft YaHei", "Segoe UI", Arial, sans-serif; color:var(--text); background:var(--bg); }
+.hero { display:flex; justify-content:space-between; align-items:center; padding:28px 36px; background:#133b5c; color:white; }
+.hero h1 { margin:0 0 4px; font-size:28px; letter-spacing:0; }
+.hero p { margin:0; color:#dbe7f4; }
+.hero-score { min-width:150px; padding:12px 18px; border:1px solid rgba(255,255,255,.24); border-radius:8px; text-align:center; }
+.hero-score strong { display:block; font-size:34px; line-height:1.1; }
+.hero-score span { color:#dbe7f4; }
+.page { width:min(1240px, calc(100% - 32px)); margin:20px auto 48px; }
+.stats { display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:10px; margin-bottom:16px; }
+.stat { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+.stat b { display:block; font-size:22px; }
+.stat span { color:var(--muted); }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; margin-bottom:16px; box-shadow:0 1px 2px rgba(20, 30, 50, .04); }
+.panel-title { display:flex; justify-content:space-between; gap:16px; align-items:center; }
+h2 { margin:0 0 12px; font-size:18px; }
+h3 { margin:0 0 8px; font-size:13px; color:var(--muted); }
+table { width:100%; border-collapse:collapse; table-layout:fixed; }
+th, td { border:1px solid var(--line); padding:9px 10px; vertical-align:top; word-break:break-word; }
+th { background:#f0f3f8; color:#3a4557; }
+.meta-table th { width:240px; text-align:left; }
+.num { text-align:right; font-variant-numeric:tabular-nums; }
+.danger { color:var(--danger); font-weight:700; }
+.muted { color:var(--muted); }
+.empty { color:var(--muted); text-align:center; padding:24px; }
+.warn { color:var(--danger); }
+a { color:#0969da; text-decoration:none; }
+a:hover { text-decoration:underline; }
+.toggle { color:var(--muted); user-select:none; }
+.match-card { border:1px solid var(--line); border-radius:8px; margin:12px 0; overflow:hidden; }
+.match-card.excluded { display:none; opacity:.72; }
+body.show-excluded .match-card.excluded { display:block; }
+.match-head { display:flex; align-items:center; gap:12px; padding:10px 12px; background:#f6f8fb; border-bottom:1px solid var(--line); }
+.match-head b { margin-left:auto; color:var(--danger); }
+.match-head em { font-style:normal; color:white; background:var(--muted); border-radius:999px; padding:2px 8px; }
+.match-head em.risk { background:var(--danger); }
+.reason { margin:10px 12px 0; color:var(--muted); }
+.compare { display:grid; grid-template-columns:1fr 1fr; gap:0; }
+.compare > div { padding:12px; min-width:0; }
+.compare > div:first-child { border-right:1px solid var(--line); }
+.compare p { margin:0; white-space:pre-wrap; }
+mark { background:var(--mark); color:#8a4b00; padding:0 1px; }
+.snippet { font-size:13px; }
+@media (max-width: 900px) {
+  .stats { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  .hero { display:block; }
+  .hero-score { margin-top:14px; }
+  .compare { grid-template-columns:1fr; }
+  .compare > div:first-child { border-right:0; border-bottom:1px solid var(--line); }
+}
+@media print {
+  body { background:white; }
+  .panel, .stat { box-shadow:none; break-inside:avoid; }
+  .toggle { display:none; }
+}
+"""
+
+
+def _js() -> str:
+    return """
+document.getElementById('showExcluded')?.addEventListener('change', function () {
+  document.body.classList.toggle('show-excluded', this.checked);
+});
+"""

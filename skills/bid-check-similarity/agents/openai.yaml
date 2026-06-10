@@ -1,0 +1,6 @@
+interface:
+  display_name: "标书查重"
+  short_description: "离线检测标书和文件相似内容并生成报告"
+  default_prompt: "使用 $bid-check-similarity 对多组投标文件查重，并生成离线 HTML 报告。"
+policy:
+  allow_implicit_invocation: true
