@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -50,22 +51,37 @@ def run_check(
     progress: Progress | None = None,
 ) -> dict[str, Any]:
     progress = progress or (lambda message: None)
+    run_started = time.perf_counter()
+    stage_seconds: dict[str, float] = {}
     groups, exclude_files, keywords, options = normalize_config(config)
 
     progress("正在解析投标文件...")
+    stage_started = time.perf_counter()
     documents = _parse_group_documents(groups, options, progress)
+    stage_seconds["parse_documents"] = round(time.perf_counter() - stage_started, 3)
+    progress(f"投标文件解析完成，用时 {stage_seconds['parse_documents']:.3f} 秒。")
 
     progress("正在解析排除文件...")
+    stage_started = time.perf_counter()
     exclude_documents = _parse_exclude_documents(exclude_files, options, progress)
+    stage_seconds["parse_excludes"] = round(time.perf_counter() - stage_started, 3)
+    progress(f"排除文件解析完成，用时 {stage_seconds['parse_excludes']:.3f} 秒。")
 
     progress("正在建立文本索引并计算相似片段...")
+    stage_started = time.perf_counter()
     matches = _find_similarity_matches(documents, exclude_documents, options)
+    stage_seconds["similarity"] = round(time.perf_counter() - stage_started, 3)
+    progress(f"相似片段计算完成，用时 {stage_seconds['similarity']:.3f} 秒。")
 
     progress("正在检测重要关键词和正则...")
+    stage_started = time.perf_counter()
     keyword_alerts, keyword_errors = _detect_keyword_alerts(documents, keywords)
+    stage_seconds["keywords"] = round(time.perf_counter() - stage_started, 3)
 
     progress("正在检测图片重复...")
+    stage_started = time.perf_counter()
     image_duplicates = _detect_image_duplicates(documents, options)
+    stage_seconds["images"] = round(time.perf_counter() - stage_started, 3)
 
     result = _build_result(
         groups=groups,
@@ -79,12 +95,17 @@ def run_check(
         keyword_errors=keyword_errors,
         image_duplicates=image_duplicates,
     )
+    result["performance"] = {
+        "stage_seconds": stage_seconds,
+        "engine_seconds": round(time.perf_counter() - run_started, 3),
+    }
 
     if output_dir:
         from .report import write_report_bundle
 
         progress("正在生成离线 HTML 报告...")
         paths = write_report_bundle(result, output_dir)
+        result["performance"]["engine_seconds"] = round(time.perf_counter() - run_started, 3)
         result["output_files"] = paths
     progress("完成。")
     return result
@@ -128,7 +149,9 @@ def _find_similarity_matches(
             if key in seen:
                 continue
             seen.add(key)
-            min_shared = max(2, int(min(len(unit.ngrams), len(candidate.ngrams)) * 0.12))
+            if not _length_ratio_ok(unit.normalized, candidate.normalized, options.min_length_ratio):
+                continue
+            min_shared = max(2, int(min(len(unit.ngrams), len(candidate.ngrams)) * options.candidate_shared_ratio))
             if shared < min_shared:
                 continue
             score = similarity_score(unit.normalized, candidate.normalized, unit.ngrams, candidate.ngrams)
@@ -240,8 +263,10 @@ class _ExcludeIndex:
                 counts[index] += 1
         best_score = 0.0
         best_unit: TextUnit | None = None
-        for index, _shared in counts.most_common(80):
+        for index, _shared in counts.most_common(self.options.exclude_candidates_per_unit):
             candidate = self.units[index]
+            if not _length_ratio_ok(unit.normalized, candidate.normalized, self.options.min_length_ratio):
+                continue
             score = similarity_score(unit.normalized, candidate.normalized, unit.ngrams, candidate.ngrams)
             if score > best_score:
                 best_score = score
@@ -360,9 +385,17 @@ def _build_result(
     keyword_errors: list[str],
     image_duplicates: list[ImageDuplicate],
 ) -> dict[str, Any]:
-    summaries = _pair_summaries(matches, groups)
+    displayed_matches = _select_report_matches(matches, groups, options)
+    summaries = _pair_summaries(matches, displayed_matches, groups)
     comparable_units = sum(1 for doc in documents for unit in doc.units if unit.comparable)
     total_units = sum(len(doc.units) for doc in documents)
+    total_similar = sum(1 for match in matches if not match.excluded)
+    total_excluded = sum(1 for match in matches if match.excluded)
+    displayed_similar = sum(1 for match in displayed_matches if not match.excluded)
+    displayed_excluded = sum(1 for match in displayed_matches if match.excluded)
+    truncated_similar = max(0, total_similar - displayed_similar)
+    truncated_excluded = max(0, total_excluded - displayed_excluded)
+    all_match_dicts = [match.to_dict() for match in matches] if options.write_all_matches else []
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "input": {
@@ -378,15 +411,23 @@ def _build_result(
             "unit_count": total_units,
             "comparable_unit_count": comparable_units,
             "short_filtered_unit_count": total_units - comparable_units,
-            "similar_match_count": sum(1 for match in matches if not match.excluded),
-            "excluded_match_count": sum(1 for match in matches if match.excluded),
+            "similar_match_count": displayed_similar,
+            "excluded_match_count": displayed_excluded,
+            "total_similar_match_count": total_similar,
+            "total_excluded_match_count": total_excluded,
+            "displayed_similar_match_count": displayed_similar,
+            "displayed_excluded_match_count": displayed_excluded,
+            "truncated_similar_match_count": truncated_similar,
+            "truncated_excluded_match_count": truncated_excluded,
+            "match_truncated": bool(truncated_similar or truncated_excluded),
             "keyword_alert_count": len(keyword_alerts),
             "image_duplicate_count": len(image_duplicates),
         },
         "documents": [_document_summary(doc) for doc in documents],
         "exclude_documents": [_document_summary(doc) for doc in exclude_documents],
         "pair_summaries": summaries,
-        "matches": [match.to_dict() for match in matches],
+        "matches": [match.to_dict() for match in displayed_matches],
+        "_all_matches": all_match_dicts,
         "keyword_alerts": [alert.to_dict() for alert in keyword_alerts],
         "keyword_errors": keyword_errors,
         "image_duplicates": [duplicate.to_dict() for duplicate in image_duplicates],
@@ -407,25 +448,82 @@ def _document_summary(doc: DocumentData) -> dict[str, Any]:
     }
 
 
-def _pair_summaries(matches: list[SimilarityMatch], groups: list[InputGroup]) -> list[dict[str, Any]]:
+def _select_report_matches(matches: list[SimilarityMatch], groups: list[InputGroup], options: CheckOptions) -> list[SimilarityMatch]:
     pair_map: dict[tuple[str, str], list[SimilarityMatch]] = defaultdict(list)
     for match in matches:
-        pair_map[(match.group_a, match.group_b)].append(match)
+        pair_map[_pair_key(match.group_a, match.group_b)].append(match)
+
+    selected: list[SimilarityMatch] = []
+    group_names = [group.name for group in groups]
+    for left_index, left in enumerate(group_names):
+        for right in group_names[left_index + 1 :]:
+            pair_matches = pair_map.get(_pair_key(left, right), [])
+            unit_counts: Counter[str] = Counter()
+            active = sorted((match for match in pair_matches if not match.excluded), key=_match_sort_key)
+            excluded = sorted((match for match in pair_matches if match.excluded), key=_match_sort_key)
+            selected.extend(_take_limited_matches(active, options.max_matches_per_pair, options.max_targets_per_unit, unit_counts))
+            selected.extend(_take_limited_matches(excluded, options.max_excluded_matches_per_pair, options.max_targets_per_unit, unit_counts))
+    selected.sort(key=lambda item: (item.excluded, -item.similarity, item.group_a, item.group_b, item.match_id))
+    return selected
+
+
+def _take_limited_matches(
+    matches: list[SimilarityMatch],
+    limit: int,
+    max_targets_per_unit: int,
+    unit_counts: Counter[str],
+) -> list[SimilarityMatch]:
+    if limit <= 0:
+        return []
+    selected: list[SimilarityMatch] = []
+    for match in matches:
+        if unit_counts[match.unit_id_a] >= max_targets_per_unit or unit_counts[match.unit_id_b] >= max_targets_per_unit:
+            continue
+        selected.append(match)
+        unit_counts[match.unit_id_a] += 1
+        unit_counts[match.unit_id_b] += 1
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _pair_summaries(
+    all_matches: list[SimilarityMatch],
+    displayed_matches: list[SimilarityMatch],
+    groups: list[InputGroup],
+) -> list[dict[str, Any]]:
+    all_pair_map: dict[tuple[str, str], list[SimilarityMatch]] = defaultdict(list)
+    displayed_pair_map: dict[tuple[str, str], list[SimilarityMatch]] = defaultdict(list)
+    for match in all_matches:
+        all_pair_map[_pair_key(match.group_a, match.group_b)].append(match)
+    for match in displayed_matches:
+        displayed_pair_map[_pair_key(match.group_a, match.group_b)].append(match)
 
     summaries: list[dict[str, Any]] = []
     group_names = [group.name for group in groups]
     for left_index, left in enumerate(group_names):
         for right in group_names[left_index + 1 :]:
-            pair_matches = pair_map.get((left, right), [])
+            pair_key = _pair_key(left, right)
+            pair_matches = all_pair_map.get(pair_key, [])
+            displayed_pair_matches = displayed_pair_map.get(pair_key, [])
             active = [match for match in pair_matches if not match.excluded]
             excluded = [match for match in pair_matches if match.excluded]
+            displayed_active = [match for match in displayed_pair_matches if not match.excluded]
+            displayed_excluded = [match for match in displayed_pair_matches if match.excluded]
             scores = [match.similarity for match in active]
             summaries.append(
                 {
                     "group_a": left,
                     "group_b": right,
-                    "match_count": len(active),
-                    "excluded_count": len(excluded),
+                    "match_count": len(displayed_active),
+                    "excluded_count": len(displayed_excluded),
+                    "total_match_count": len(active),
+                    "total_excluded_count": len(excluded),
+                    "displayed_match_count": len(displayed_active),
+                    "displayed_excluded_count": len(displayed_excluded),
+                    "truncated_match_count": max(0, len(active) - len(displayed_active)),
+                    "truncated_excluded_count": max(0, len(excluded) - len(displayed_excluded)),
+                    "truncated": len(active) > len(displayed_active) or len(excluded) > len(displayed_excluded),
                     "max_similarity": round(max(scores), 4) if scores else 0,
                     "avg_similarity": round(sum(scores) / len(scores), 4) if scores else 0,
                     "files": sorted({Path(match.file_a).name for match in active} | {Path(match.file_b).name for match in active}),
@@ -433,3 +531,21 @@ def _pair_summaries(matches: list[SimilarityMatch], groups: list[InputGroup]) ->
             )
     summaries.sort(key=lambda item: (-item["match_count"], -item["max_similarity"], item["group_a"], item["group_b"]))
     return summaries
+
+
+def _pair_key(left: str, right: str) -> tuple[str, str]:
+    return (left, right) if left <= right else (right, left)
+
+
+def _match_sort_key(match: SimilarityMatch) -> tuple[float, str, str, str]:
+    return (-match.similarity, match.file_a, match.file_b, match.match_id)
+
+
+def _length_ratio_ok(left: str, right: str, min_ratio: float) -> bool:
+    if min_ratio <= 0:
+        return True
+    left_len = len(left)
+    right_len = len(right)
+    if not left_len or not right_len:
+        return False
+    return min(left_len, right_len) / max(left_len, right_len) >= min_ratio

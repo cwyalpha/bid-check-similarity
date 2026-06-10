@@ -20,6 +20,14 @@ class CheckOptions:
     max_unit_chars: int = 420
     max_candidates_per_unit: int = 200
     max_ngram_postings: int = 300
+    max_matches_per_pair: int = 600
+    max_excluded_matches_per_pair: int = 200
+    max_targets_per_unit: int = 20
+    write_all_matches: bool = False
+    candidate_shared_ratio: float = 0.12
+    exclude_candidates_per_unit: int = 80
+    min_length_ratio: float = 0.55
+    similarity_backend: str = "local_ngrams"
     image_ahash_distance: int = 6
     legacy_conversion_timeout: int = 120
     soffice_path: str = ""
@@ -39,6 +47,14 @@ class CheckOptions:
             "max_unit_chars",
             "max_candidates_per_unit",
             "max_ngram_postings",
+            "max_matches_per_pair",
+            "max_excluded_matches_per_pair",
+            "max_targets_per_unit",
+            "write_all_matches",
+            "candidate_shared_ratio",
+            "exclude_candidates_per_unit",
+            "min_length_ratio",
+            "similarity_backend",
             "image_ahash_distance",
             "legacy_conversion_timeout",
             "soffice_path",
@@ -55,12 +71,24 @@ class CheckOptions:
         self.max_unit_chars = max(80, int(self.max_unit_chars))
         self.max_candidates_per_unit = max(20, int(self.max_candidates_per_unit))
         self.max_ngram_postings = max(50, int(self.max_ngram_postings))
+        self.max_matches_per_pair = max(1, int(self.max_matches_per_pair))
+        self.max_excluded_matches_per_pair = max(0, int(self.max_excluded_matches_per_pair))
+        self.max_targets_per_unit = max(1, int(self.max_targets_per_unit))
+        self.write_all_matches = _coerce_bool(self.write_all_matches)
+        self.exclude_candidates_per_unit = max(1, int(self.exclude_candidates_per_unit))
         self.image_ahash_distance = max(0, int(self.image_ahash_distance))
         self.legacy_conversion_timeout = max(10, int(self.legacy_conversion_timeout))
         self.similarity_threshold = _clamp_float(self.similarity_threshold, 0.1, 1.0)
         self.exclude_threshold = _clamp_float(self.exclude_threshold, 0.1, 1.0)
+        self.candidate_shared_ratio = _clamp_float(self.candidate_shared_ratio, 0.0, 1.0)
+        self.min_length_ratio = _clamp_float(self.min_length_ratio, 0.0, 1.0)
         self.sentence_delimiters = str(self.sentence_delimiters or "。！？!?；;")
         self.soft_delimiters = str(self.soft_delimiters or "，,、：:")
+        self.similarity_backend = str(self.similarity_backend or "local_ngrams").strip().lower()
+        if self.similarity_backend == "embedding":
+            raise ValueError("embedding 相似度后端仅预留接口，本版本尚未启用；请使用 local_ngrams。")
+        if self.similarity_backend != "local_ngrams":
+            raise ValueError(f"未知相似度后端: {self.similarity_backend}")
         self.soffice_path = str(self.soffice_path or "").strip()
 
     def to_dict(self) -> dict[str, Any]:
@@ -75,6 +103,14 @@ class CheckOptions:
             "max_unit_chars": self.max_unit_chars,
             "max_candidates_per_unit": self.max_candidates_per_unit,
             "max_ngram_postings": self.max_ngram_postings,
+            "max_matches_per_pair": self.max_matches_per_pair,
+            "max_excluded_matches_per_pair": self.max_excluded_matches_per_pair,
+            "max_targets_per_unit": self.max_targets_per_unit,
+            "write_all_matches": self.write_all_matches,
+            "candidate_shared_ratio": self.candidate_shared_ratio,
+            "exclude_candidates_per_unit": self.exclude_candidates_per_unit,
+            "min_length_ratio": self.min_length_ratio,
+            "similarity_backend": self.similarity_backend,
             "image_ahash_distance": self.image_ahash_distance,
             "legacy_conversion_timeout": self.legacy_conversion_timeout,
             "soffice_path": self.soffice_path,
@@ -239,3 +275,11 @@ def _clamp_float(value: Any, low: float, high: float) -> float:
     except (TypeError, ValueError):
         number = low
     return min(high, max(low, number))
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on", "是"}
+    return bool(value)

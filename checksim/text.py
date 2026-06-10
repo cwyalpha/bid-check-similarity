@@ -47,6 +47,7 @@ def split_blocks_to_units(
         if not cleaned:
             continue
         parts = _split_long_text(cleaned, max_unit_chars, sentence_delimiters, soft_delimiters)
+        parts = _merge_short_neighbors(parts, max_unit_chars, min_chars=4)
         for part_index, part in enumerate(parts, start=1):
             if part:
                 units.append((f"段{block_index}.{part_index}", part))
@@ -147,18 +148,19 @@ def _fixed_chunks(text: str, max_unit_chars: int) -> list[str]:
     return chunks
 
 
-def _merge_small_neighbors(parts: list[str], max_unit_chars: int) -> list[str]:
+def _merge_short_neighbors(parts: list[str], max_unit_chars: int, min_chars: int) -> list[str]:
     merged: list[str] = []
     buffer = ""
     for part in parts:
-        candidate = (buffer + part).strip() if buffer else part.strip()
+        part = part.strip()
+        candidate = (buffer + part).strip() if buffer else part
         if not buffer:
-            buffer = part.strip()
-        elif visible_char_count(candidate) <= max_unit_chars:
+            buffer = part
+        elif (visible_char_count(buffer) < min_chars or visible_char_count(part) < min_chars) and visible_char_count(candidate) <= max_unit_chars:
             buffer = candidate
         else:
             merged.append(buffer)
-            buffer = part.strip()
+            buffer = part
     if buffer:
         merged.append(buffer)
     return merged

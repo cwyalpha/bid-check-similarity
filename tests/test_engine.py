@@ -8,7 +8,7 @@ from unittest.mock import patch
 from docx import Document
 from PIL import Image
 
-from checksim.engine import _hamming_hex, run_check
+from checksim.engine import _hamming_hex, _length_ratio_ok, run_check
 from checksim.parsers import parse_file
 from checksim.models import CheckOptions
 from checksim.text import split_blocks_to_units
@@ -232,6 +232,68 @@ class CheckSimEngineTest(unittest.TestCase):
             self.assertNotIn("#", text)
             self.assertNotIn("**", text)
             self.assertNotIn("|", text)
+
+    def test_result_truncation_and_all_matches_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            left = root / "left.md"
+            right = root / "right.md"
+            base_lines = [
+                f"第{index}段 本项目采用统一身份认证、安全审计、日志留存和月度运行分析机制，确保业务系统稳定运行并形成可追溯记录。"
+                for index in range(1, 9)
+            ]
+            left.write_text("\n\n".join(base_lines), encoding="utf-8")
+            right.write_text(
+                "\n\n".join(line.replace("确保", "保障").replace("可追溯记录", "追溯记录") for line in base_lines),
+                encoding="utf-8",
+            )
+
+            result = run_check(
+                {
+                    "groups": [{"name": "甲公司", "files": [str(left)]}, {"name": "乙公司", "files": [str(right)]}],
+                    "options": {
+                        "min_chars": 10,
+                        "similarity_threshold": 0.78,
+                        "max_matches_per_pair": 2,
+                        "max_excluded_matches_per_pair": 0,
+                        "max_targets_per_unit": 20,
+                        "write_all_matches": True,
+                    },
+                },
+                root / "outputs",
+            )
+
+            stats = result["stats"]
+            self.assertTrue(stats["match_truncated"])
+            self.assertEqual(stats["displayed_similar_match_count"], 2)
+            self.assertGreater(stats["total_similar_match_count"], stats["displayed_similar_match_count"])
+            self.assertEqual(len([match for match in result["matches"] if not match["excluded"]]), 2)
+
+            output_files = result["output_files"]
+            all_matches_path = Path(output_files["all_matches_jsonl"])
+            self.assertTrue(all_matches_path.exists())
+            jsonl_count = len(all_matches_path.read_text(encoding="utf-8").splitlines())
+            self.assertEqual(jsonl_count, stats["total_similar_match_count"] + stats["total_excluded_match_count"])
+
+            result_json = Path(output_files["result_json"]).read_text(encoding="utf-8")
+            self.assertNotIn('"_all_matches"', result_json)
+            report_html = Path(output_files["report_html"]).read_text(encoding="utf-8")
+            self.assertIn("已截断", report_html)
+            self.assertIn("all_matches.jsonl", report_html)
+            self.assertIn("pairSummaryTable", report_html)
+            self.assertIn("minSimFilter", report_html)
+            self.assertIn("pairIncludeExcluded", report_html)
+
+            compare_html = Path(output_files["compare_pages"][0]["path"]).read_text(encoding="utf-8")
+            self.assertIn("仅标注报告保留的代表性命中", compare_html)
+
+    def test_similarity_backend_embedding_is_reserved(self) -> None:
+        with self.assertRaisesRegex(ValueError, "embedding"):
+            CheckOptions.from_dict({"similarity_backend": "embedding"})
+
+    def test_length_ratio_prefilter(self) -> None:
+        self.assertFalse(_length_ratio_ok("abcdef", "abcdefghijklmnopqrstuvwxyz", 0.55))
+        self.assertTrue(_length_ratio_ok("abcdef", "abcdefghijklmnopqrstuvwxyz", 0.0))
 
 
 def _make_docx(path: Path, paragraphs: list[str], image_path: Path | None) -> None:

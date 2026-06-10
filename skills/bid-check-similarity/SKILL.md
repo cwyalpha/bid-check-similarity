@@ -12,7 +12,7 @@ description: 离线标书和文件查重 Skill，支持按公司/投标单位分
 1. 确认或推断输入分组。每组代表一家投标单位，可包含一个或多个 `.docx`、`.doc`、`.wps`、`.md` 文件。
 2. 根据需要添加排除文件，例如招标文件、模板文件、统一格式要求等允许共享的内容。
 3. 根据需要添加重要关键词或正则规则。正则规则必须以 `re:` 开头。
-4. 生成 JSON 配置。字段结构和默认参数见 `references/config-schema.md`。
+4. 生成 JSON 配置。默认推荐使用“平衡”参数：每个组对最多展示 600 条异常相似、200 条已排除相似；字段结构和默认参数见 `references/config-schema.md`。
 5. 调用内置 CLI。若用户未指定输出目录，优先在当前项目目录运行命令，让默认结果写入当前目录下的 `outputs/run_时间戳`：
 
 ```bash
@@ -20,6 +20,7 @@ python path/to/skill/scripts/run_check.py --config case.json --output outputs/ru
 ```
 
 6. 回复时优先给出生成的 `report.html` 路径，再概述异常相似片段、已排除片段、关键词异常和旧格式转换限制。
+7. 如果 `result.json` 显示报告被截断，回复中必须说明“展示数/总数”和是否生成 `all_matches.jsonl`；如未生成全量文件，提示用户可设置 `write_all_matches=true` 后重跑。
 
 ## 平台说明
 
@@ -34,6 +35,8 @@ python path/to/skill/scripts/run_check.py --config case.json --output outputs/ru
 
 - `report.html`：离线总览报告，CSS/JS 内嵌。
 - `compare_*.html`：两组文件左右对照页，支持高亮文本双向跳转。
-- `result.json`：结构化结果，便于后续 Agent 或脚本继续处理。
+- `result.json`：结构化结果，默认保存报告展示用的代表性相似片段和完整统计。
+- `all_matches.jsonl`：仅当 `write_all_matches=true` 时生成，保存全量相似结果。
 
 不要比较同一组内部文件。不要把短文本过滤用于关键词检测；关键词和正则必须基于全文检测。
+不要选择 `similarity_backend="embedding"`；该接口目前仅预留，本版本只启用 `local_ngrams`。

@@ -1,6 +1,6 @@
 [project]
 name = "checksim"
-version = "0.1.0"
+version = "0.2.0"
 description = "Offline bid/document similarity checker"
 requires-python = ">=3.8"
 dependencies = [

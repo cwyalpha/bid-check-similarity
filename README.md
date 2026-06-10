@@ -8,8 +8,9 @@
 - 支持可选排除文件，例如招标文件、模板文件、统一格式要求。
 - 支持重要关键词和 `re:` 正则规则；同一规则命中 2 个及以上公司组即提示异常。
 - 支持短文本过滤、文本相似阈值、排除文件阈值、分段符号等参数设置。
+- 支持快速/平衡/详细报告预设，默认控制每组对展示数量，避免大文件报告过慢。
 - 支持 `.doc/.wps` 自动转换：Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试，Linux/macOS 下使用 LibreOffice。
-- 生成 `report.html`、`result.json` 和按组对生成的 `compare_*.html` 左右对照页。
+- 生成 `report.html`、`result.json`、可选 `all_matches.jsonl` 和按组对生成的 `compare_*.html` 左右对照页。
 - HTML 报告的 CSS/JS 均内嵌，不依赖 CDN，适合内网离线使用。
 
 ## 桌面版
@@ -29,7 +30,7 @@
    - “批量文件夹成组”：选择包含多个公司文件夹的上级目录，每个直接子文件夹及其子目录自动作为一个公司/分组。
 2. 可选添加排除文件 B。
 3. 可选填写关键词或正则规则。
-4. 调整短文本过滤、相似度阈值、分段符号等参数。
+4. 选择快速/平衡/详细报告预设，必要时展开高级参数调整结果上限、候选召回和全量 JSONL 导出。
 5. 点击“开始检测”，完成后会自动打开 `report.html`。
 
 ## 命令行
@@ -96,6 +97,14 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Lin
     "exclude_threshold": 0.86,
     "sentence_delimiters": "。！？!?；;",
     "soft_delimiters": "，,、：:",
+    "max_matches_per_pair": 600,
+    "max_excluded_matches_per_pair": 200,
+    "max_targets_per_unit": 20,
+    "write_all_matches": false,
+    "candidate_shared_ratio": 0.12,
+    "exclude_candidates_per_unit": 80,
+    "min_length_ratio": 0.55,
+    "similarity_backend": "local_ngrams",
     "image_ahash_distance": 6,
     "legacy_conversion_timeout": 120,
     "soffice_path": ""
@@ -111,9 +120,10 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Lin
 
 - `report.html`：总览报告，包含统计、参数、两两比对、关键词异常、图片重复和明细。
 - `compare_*.html`：两组文件左右对照页，支持点击高亮片段跳转到对侧对应片段。
-- `result.json`：完整结构化结果，便于后续 Agent 或脚本继续处理。
+- `result.json`：结构化结果，默认保存报告展示用的代表性相似片段和完整统计。
+- `all_matches.jsonl`：仅当 `write_all_matches=true` 时生成，保存全量相似结果，适合后续脚本处理。
 
-左右对照页中，高亮颜色越深表示相似度越高；已排除片段颜色更淡。左右两栏可独立滚动，并支持“上一个/下一个高亮”导航。
+如果结果被截断，报告会显示“展示/总数/已截断”，并提示是否已生成全量 JSONL。左右对照页中，高亮颜色越深表示相似度越高；已排除片段颜色更淡。左右两栏可独立滚动，并支持“上一个/下一个高亮”导航。
 
 ## 开发与打包
 
@@ -121,6 +131,13 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Lin
 
 ```powershell
 python -m unittest discover -s tests -v
+```
+
+性能 smoke 会临时生成 4 组 10 万字符级 Markdown 样本，不会提交大文本：
+
+```powershell
+python scripts\perf_smoke.py --mode cli --groups 4 --chars-per-file 100000
+python scripts\perf_smoke.py --mode skill --groups 4 --chars-per-file 100000
 ```
 
 构建 Windows 单文件 exe：

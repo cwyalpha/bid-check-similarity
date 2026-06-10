@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import queue
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +20,13 @@ SUPPORTED_FILETYPES = [
     ("Word/WPS", "*.docx *.doc *.wps"),
     ("Markdown", "*.md"),
 ]
+
+
+REPORT_PRESETS = {
+    "快速": {"max_matches_per_pair": 200, "max_excluded_matches_per_pair": 50},
+    "平衡": {"max_matches_per_pair": 600, "max_excluded_matches_per_pair": 200},
+    "详细": {"max_matches_per_pair": 1500, "max_excluded_matches_per_pair": 500},
+}
 
 
 class _ScrollableFrame(ttk.Frame):
@@ -74,6 +83,16 @@ class CheckSimApp(ttk.Frame):
         self.image_ahash_distance = tk.StringVar(value=str(defaults.image_ahash_distance))
         self.sentence_delimiters = tk.StringVar(value=defaults.sentence_delimiters)
         self.soft_delimiters = tk.StringVar(value=defaults.soft_delimiters)
+        self.report_preset = tk.StringVar(value="平衡")
+        self.max_matches_per_pair = tk.StringVar(value=str(defaults.max_matches_per_pair))
+        self.max_excluded_matches_per_pair = tk.StringVar(value=str(defaults.max_excluded_matches_per_pair))
+        self.max_targets_per_unit = tk.StringVar(value=str(defaults.max_targets_per_unit))
+        self.write_all_matches = tk.BooleanVar(value=defaults.write_all_matches)
+        self.candidate_shared_ratio = tk.StringVar(value=str(defaults.candidate_shared_ratio))
+        self.exclude_candidates_per_unit = tk.StringVar(value=str(defaults.exclude_candidates_per_unit))
+        self.min_length_ratio = tk.StringVar(value=str(defaults.min_length_ratio))
+        self.similarity_backend = tk.StringVar(value=defaults.similarity_backend)
+        self.show_advanced = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="就绪")
 
         self._build()
@@ -149,6 +168,25 @@ class CheckSimApp(ttk.Frame):
         self.keyword_text = tk.Text(frame, height=4, wrap="word")
         self.keyword_text.pack(fill="x", padx=8, pady=(0, 8))
 
+        preset_row = ttk.Frame(frame)
+        preset_row.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Label(preset_row, text="报告预设").pack(side=LEFT, padx=(0, 6))
+        preset_combo = ttk.Combobox(
+            preset_row,
+            textvariable=self.report_preset,
+            values=list(REPORT_PRESETS) + ["自定义"],
+            width=8,
+            state="readonly",
+        )
+        preset_combo.pack(side=LEFT, padx=(0, 12))
+        preset_combo.bind("<<ComboboxSelected>>", lambda _event: self._apply_report_preset())
+        ttk.Checkbutton(
+            preset_row,
+            text="显示高级参数",
+            variable=self.show_advanced,
+            command=self._toggle_advanced_options,
+        ).pack(side=LEFT)
+
         options = ttk.Frame(frame)
         options.pack(fill="x", padx=8, pady=(0, 8))
         self._option_entry(options, "中文/混合最短字符", self.min_chars, 0, 0)
@@ -161,6 +199,22 @@ class CheckSimApp(ttk.Frame):
         options.columnconfigure(1, weight=1)
         options.columnconfigure(3, weight=1)
 
+        self.advanced_options = ttk.Frame(frame)
+        self._option_entry(self.advanced_options, "异常上限/组对", self.max_matches_per_pair, 0, 0)
+        self._option_entry(self.advanced_options, "排除上限/组对", self.max_excluded_matches_per_pair, 0, 2)
+        self._option_entry(self.advanced_options, "单片段目标上限", self.max_targets_per_unit, 1, 0)
+        self._option_entry(self.advanced_options, "排除候选上限", self.exclude_candidates_per_unit, 1, 2)
+        self._option_entry(self.advanced_options, "共享ngram比例", self.candidate_shared_ratio, 2, 0)
+        self._option_entry(self.advanced_options, "最小长度比例", self.min_length_ratio, 2, 2)
+        self._option_entry(self.advanced_options, "相似度后端", self.similarity_backend, 3, 0)
+        ttk.Checkbutton(
+            self.advanced_options,
+            text="同时导出全量 all_matches.jsonl",
+            variable=self.write_all_matches,
+        ).grid(row=3, column=2, columnspan=2, sticky="w", pady=4)
+        self.advanced_options.columnconfigure(1, weight=1)
+        self.advanced_options.columnconfigure(3, weight=1)
+
     def _build_run_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="4. 检测与报告")
         frame.pack(fill="x", pady=(0, 8))
@@ -169,6 +223,8 @@ class CheckSimApp(ttk.Frame):
         ttk.Button(frame, text="打开报告", command=self._open_report).pack(side=LEFT, padx=(0, 6))
         ttk.Button(frame, text="打开输出目录", command=self._open_output_dir).pack(side=LEFT, padx=(0, 6))
         ttk.Button(frame, text="帮助", command=self._show_help).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(frame, text="保存配置", command=self._save_config).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(frame, text="加载配置", command=self._load_config).pack(side=LEFT, padx=(0, 6))
 
     def _build_log_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="进度日志")
@@ -187,11 +243,27 @@ class CheckSimApp(ttk.Frame):
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(buttons, text="刷新", command=self._refresh_history).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(buttons, text="打开选中报告", command=self._open_selected_history).pack(side=LEFT)
+        ttk.Button(buttons, text="打开选中报告", command=self._open_selected_history).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(buttons, text="打开目录", command=self._open_selected_history_dir).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(buttons, text="复制路径", command=self._copy_selected_history_path).pack(side=LEFT, padx=(0, 6))
+        ttk.Button(buttons, text="删除记录", command=self._delete_selected_history).pack(side=LEFT)
 
     def _option_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, row: int, column: int) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=column, sticky="w", padx=(0, 6), pady=4)
         ttk.Entry(parent, textvariable=variable, width=12).grid(row=row, column=column + 1, sticky="ew", padx=(0, 14), pady=4)
+
+    def _apply_report_preset(self) -> None:
+        preset = REPORT_PRESETS.get(self.report_preset.get())
+        if not preset:
+            return
+        self.max_matches_per_pair.set(str(preset["max_matches_per_pair"]))
+        self.max_excluded_matches_per_pair.set(str(preset["max_excluded_matches_per_pair"]))
+
+    def _toggle_advanced_options(self) -> None:
+        if self.show_advanced.get():
+            self.advanced_options.pack(fill="x", padx=8, pady=(0, 8))
+        else:
+            self.advanced_options.pack_forget()
 
     def _add_file_group(self) -> None:
         files = filedialog.askopenfilenames(
@@ -391,7 +463,7 @@ class CheckSimApp(ttk.Frame):
                     self._log(f"报告已生成: {self.last_report}")
                     self._refresh_history()
                     self._auto_open_report()
-                    messagebox.showinfo("完成", "检测完成，报告已生成。")
+                    messagebox.showinfo("完成", _completion_message(result))
                 elif kind == "error":
                     self._set_running(False, "出错")
                     self._log(f"错误: {payload}")
@@ -410,8 +482,12 @@ class CheckSimApp(ttk.Frame):
         self.run_button.configure(state="disabled" if running else "normal")
 
     def _collect_config(self) -> dict[str, object]:
+        return self._build_config(require_min_groups=True)
+
+    def _build_config(self, require_min_groups: bool) -> dict[str, object]:
         if len(self.groups) < 2:
-            raise ValueError("至少需要添加 2 个投标文件分组。")
+            if require_min_groups:
+                raise ValueError("至少需要添加 2 个投标文件分组。")
         keywords = [line.strip() for line in self.keyword_text.get("1.0", END).splitlines() if line.strip()]
         options = {
             "min_chars": _parse_int(self.min_chars.get(), "中文/混合最短字符"),
@@ -421,13 +497,87 @@ class CheckSimApp(ttk.Frame):
             "image_ahash_distance": _parse_int(self.image_ahash_distance.get(), "图片近似距离"),
             "sentence_delimiters": self.sentence_delimiters.get(),
             "soft_delimiters": self.soft_delimiters.get(),
+            "max_matches_per_pair": _parse_int(self.max_matches_per_pair.get(), "异常上限/组对"),
+            "max_excluded_matches_per_pair": _parse_int(self.max_excluded_matches_per_pair.get(), "排除上限/组对"),
+            "max_targets_per_unit": _parse_int(self.max_targets_per_unit.get(), "单片段目标上限"),
+            "write_all_matches": self.write_all_matches.get(),
+            "candidate_shared_ratio": _parse_ratio(self.candidate_shared_ratio.get(), "共享ngram比例"),
+            "exclude_candidates_per_unit": _parse_int(self.exclude_candidates_per_unit.get(), "排除候选上限"),
+            "min_length_ratio": _parse_ratio(self.min_length_ratio.get(), "最小长度比例"),
+            "similarity_backend": self.similarity_backend.get().strip() or "local_ngrams",
         }
+        options = CheckOptions.from_dict(options).to_dict()
         return {
-            "groups": self.groups,
-            "exclude_files": self.exclude_files,
+            "groups": [{"name": str(group.get("name", "")), "files": list(group.get("files", []))} for group in self.groups],
+            "exclude_files": list(self.exclude_files),
             "keywords": keywords,
             "options": options,
         }
+
+    def _save_config(self) -> None:
+        try:
+            config = self._build_config(require_min_groups=False)
+        except ValueError as exc:
+            messagebox.showerror("参数错误", str(exc))
+            return
+        path = filedialog.asksaveasfilename(
+            title="保存检测配置",
+            defaultextension=".json",
+            initialfile="case.json",
+            filetypes=[("JSON 配置", "*.json"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        Path(path).write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._log(f"配置已保存: {path}")
+        messagebox.showinfo("保存完成", "当前分组、排除文件、关键词和参数已保存。")
+
+    def _load_config(self) -> None:
+        path = filedialog.askopenfilename(
+            title="加载检测配置",
+            filetypes=[("JSON 配置", "*.json"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+            options = CheckOptions.from_dict(raw.get("options") or {})
+        except Exception as exc:
+            messagebox.showerror("加载失败", f"无法读取配置：{exc}")
+            return
+
+        groups: list[dict[str, object]] = []
+        for index, group in enumerate(raw.get("groups") or [], start=1):
+            files = [normalize_path(file) for file in group.get("files", [])]
+            if files:
+                groups.append({"name": str(group.get("name") or f"公司{index}"), "files": files})
+        self.groups = groups
+        self.exclude_files = [normalize_path(file) for file in raw.get("exclude_files") or []]
+        self.keyword_text.delete("1.0", END)
+        self.keyword_text.insert("1.0", "\n".join(str(item) for item in raw.get("keywords") or []))
+        self._apply_options_to_vars(options)
+        self._refresh_groups()
+        self._refresh_excludes()
+        self._log(f"配置已加载: {path}")
+        messagebox.showinfo("加载完成", "配置已加载到界面，可继续调整后检测。")
+
+    def _apply_options_to_vars(self, options: CheckOptions) -> None:
+        self.min_chars.set(str(options.min_chars))
+        self.min_words.set(str(options.min_words))
+        self.similarity_threshold.set(str(options.similarity_threshold))
+        self.exclude_threshold.set(str(options.exclude_threshold))
+        self.image_ahash_distance.set(str(options.image_ahash_distance))
+        self.sentence_delimiters.set(options.sentence_delimiters)
+        self.soft_delimiters.set(options.soft_delimiters)
+        self.max_matches_per_pair.set(str(options.max_matches_per_pair))
+        self.max_excluded_matches_per_pair.set(str(options.max_excluded_matches_per_pair))
+        self.max_targets_per_unit.set(str(options.max_targets_per_unit))
+        self.write_all_matches.set(options.write_all_matches)
+        self.candidate_shared_ratio.set(str(options.candidate_shared_ratio))
+        self.exclude_candidates_per_unit.set(str(options.exclude_candidates_per_unit))
+        self.min_length_ratio.set(str(options.min_length_ratio))
+        self.similarity_backend.set(options.similarity_backend)
+        self.report_preset.set(_preset_for_limits(options.max_matches_per_pair, options.max_excluded_matches_per_pair))
 
     def _open_report(self) -> None:
         if not self.last_report:
@@ -475,13 +625,51 @@ class CheckSimApp(ttk.Frame):
             self.history_list.insert(END, str(report))
 
     def _open_selected_history(self) -> None:
+        path = self._selected_history_path()
+        if not path:
+            return
+        self.last_report = str(path)
+        self.last_output_dir = str(path.parent)
+        _open_path(str(path))
+
+    def _open_selected_history_dir(self) -> None:
+        path = self._selected_history_path()
+        if not path:
+            return
+        _open_path(str(path.parent))
+
+    def _copy_selected_history_path(self) -> None:
+        path = self._selected_history_path()
+        if not path:
+            return
+        self.master.clipboard_clear()
+        self.master.clipboard_append(str(path))
+        self.status.set("已复制报告路径")
+        self._log(f"已复制报告路径: {path}")
+
+    def _delete_selected_history(self) -> None:
+        path = self._selected_history_path()
+        if not path:
+            return
+        target = path.parent
+        if not _is_history_run_dir(target):
+            messagebox.showwarning("无法删除", "只能删除当前项目 outputs/run_* 下的历史报告。")
+            return
+        if not messagebox.askyesno("删除历史报告", f"确认删除该历史输出目录？\n{target}", parent=self.master):
+            return
+        try:
+            shutil.rmtree(target)
+        except Exception as exc:
+            messagebox.showerror("删除失败", str(exc))
+            return
+        self._refresh_history()
+        self._log(f"已删除历史输出目录: {target}")
+
+    def _selected_history_path(self) -> Path | None:
         selected = self.history_list.curselection()
         if not selected:
-            return
-        path = self.history_list.get(selected[0])
-        self.last_report = path
-        self.last_output_dir = str(Path(path).parent)
-        _open_path(path)
+            return None
+        return Path(self.history_list.get(selected[0])).resolve()
 
     def _log(self, message: str) -> None:
         self.log_text.configure(state="normal")
@@ -543,6 +731,44 @@ def _group_file_signature(group: dict[str, object]) -> tuple[str, ...]:
     return tuple(sorted(normalize_path(str(file)) for file in files))
 
 
+def _preset_for_limits(max_matches: int, max_excluded: int) -> str:
+    for name, values in REPORT_PRESETS.items():
+        if values["max_matches_per_pair"] == max_matches and values["max_excluded_matches_per_pair"] == max_excluded:
+            return name
+    return "自定义"
+
+
+def _is_history_run_dir(path: Path) -> bool:
+    try:
+        outputs = (Path.cwd() / "outputs").resolve()
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return resolved.name.startswith("run_") and outputs in resolved.parents
+
+
+def _completion_message(result: object) -> str:
+    if not isinstance(result, dict):
+        return "检测完成，报告已生成。"
+    stats = result.get("stats", {})
+    output_files = result.get("output_files", {})
+    if not isinstance(stats, dict) or not isinstance(output_files, dict):
+        return "检测完成，报告已生成。"
+    lines = [
+        "检测完成，报告已生成并已尝试自动打开。",
+        f"输出目录：{output_files.get('output_dir', '')}",
+        f"异常片段展示/总数：{stats.get('displayed_similar_match_count', stats.get('similar_match_count', 0))}/{stats.get('total_similar_match_count', stats.get('similar_match_count', 0))}",
+        f"已排除片段展示/总数：{stats.get('displayed_excluded_match_count', stats.get('excluded_match_count', 0))}/{stats.get('total_excluded_match_count', stats.get('excluded_match_count', 0))}",
+    ]
+    if stats.get("match_truncated"):
+        lines.append("报告已截断，仅展示代表性命中。")
+        if output_files.get("all_matches_jsonl"):
+            lines.append(f"全量结果：{output_files.get('all_matches_jsonl')}")
+        else:
+            lines.append("如需全量明细，请开启“同时导出全量 all_matches.jsonl”。")
+    return "\n".join(lines)
+
+
 def _help_text() -> str:
     return "\n".join(
         [
@@ -575,12 +801,15 @@ def _help_text() -> str:
             "3. 关键词检测不受短文本过滤影响；同一规则命中 2 个及以上公司/分组会判为异常。",
             "",
             "五、设置参数",
+            "0. 报告预设：快速适合先扫一遍，平衡适合默认复核，详细会保留更多片段但报告更大。",
             "1. 中文/混合最短字符：低于该长度的短句不参与相似度比对，默认 20。",
             "2. 英文最短词数：英文片段低于该词数不参与相似度比对，默认 8。",
             "3. 文本相似阈值：越高越严格；默认 0.78，适合发现轻微改写。",
             "4. 排除文件阈值：默认 0.86，建议比文本相似阈值更高。",
             "5. 强分段符号：遇到这些符号会优先切分句子，默认包含句号、问号、叹号、分号。",
             "6. 长句辅助切分：长句超过限制时用这些符号辅助切开，默认包含逗号、顿号、冒号。",
+            "7. 高级参数可设置每组对保留的异常/已排除片段上限、单个片段最多关联多少目标、候选召回比例、长度过滤比例。",
+            "8. 如需完整机器可读结果，请勾选“同时导出全量 all_matches.jsonl”；默认报告只保留代表性片段以避免大文件报告过慢。",
             "",
             "六、开始检测和查看报告",
             "1. 点击“开始检测”，右侧日志会显示解析、索引、相似计算和报告生成进度。",
@@ -589,6 +818,8 @@ def _help_text() -> str:
             "4. report.html 是总览；compare_*.html 是两组文件左右对照页。",
             "5. 左右对照页支持点击高亮片段跳到对侧对应片段；角标数字表示对侧有多处相似文本。",
             "6. 高亮颜色越深表示相似度越高；已排除片段颜色更淡。",
+            "7. “保存配置/加载配置”可以复用当前分组、排除文件、关键词和参数。",
+            "8. 历史报告支持打开目录、复制路径和删除当前项目 outputs/run_* 下的旧记录。",
             "",
             "七、命令行与 Skill",
             "1. 命令行入口：python -m checksim.cli --config case.json --output outputs/run_demo。",
@@ -612,6 +843,16 @@ def _parse_float(value: str, label: str) -> float:
     except ValueError as exc:
         raise ValueError(f"{label} 必须是数字。") from exc
     if not 0 < number <= 1:
+        raise ValueError(f"{label} 必须在 0 到 1 之间。")
+    return number
+
+
+def _parse_ratio(value: str, label: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} 必须是数字。") from exc
+    if not 0 <= number <= 1:
         raise ValueError(f"{label} 必须在 0 到 1 之间。")
     return number
 
