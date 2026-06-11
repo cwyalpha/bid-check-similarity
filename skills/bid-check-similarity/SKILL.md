@@ -36,6 +36,7 @@ python path/to/skill/scripts/run_check.py --config case.json --output outputs/ru
 
 ## 平台说明
 
+- 本 Skill 自带 `scripts/vendor/checksim` 核心代码副本；运行 `scripts/run_check.py` 时只使用 Skill 目录内文件，不依赖仓库根目录。
 - `.docx`、`.md` 和 `.txt` 在 Windows 与 Linux 上直接解析；`.txt` 按纯文本处理，不做 Markdown 去格式。
 - `.doc/.wps` 会先转换为临时 `.docx` 再解析，原始文件不会被修改。
 - Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试转换。

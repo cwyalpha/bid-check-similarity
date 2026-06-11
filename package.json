@@ -1,14 +1,16 @@
 {
   "name": "bid-check-similarity",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Offline bid and document similarity checker with an agent skill installer.",
   "private": false,
   "bin": {
     "bid-check-similarity": "scripts/install-skill.js"
   },
   "files": [
-    "checksim/*.py",
     "skills/bid-check-similarity",
+    "!**/__pycache__/**",
+    "!**/*.pyc",
+    "!**/*.pyo",
     "scripts/install-skill.js",
     "README.md",
     "requirements-win38.txt"

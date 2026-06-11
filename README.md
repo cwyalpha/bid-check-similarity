@@ -72,6 +72,7 @@ python -m pip install -r /path/to/agent/skills/bid-check-similarity/scripts/requ
 ```
 
 Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Linux。Windows 处理 `.doc/.wps` 时可使用 WPS/Office/LibreOffice；Linux 处理旧格式文件需要 LibreOffice `soffice`。
+安装后的 Skill 是自包含的：`scripts/vendor/checksim` 内置核心代码副本，运行时不依赖仓库根目录或外部脚本。
 
 ## 配置示例
 
@@ -125,6 +126,12 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Lin
 
 ```powershell
 python -m unittest discover -s tests -v
+```
+
+同步 Skill 内置核心代码：
+
+```powershell
+python scripts\sync_skill_vendor.py
 ```
 
 性能 smoke 会临时生成 4 组 10 万字符级 Markdown 样本，不会提交大文本：

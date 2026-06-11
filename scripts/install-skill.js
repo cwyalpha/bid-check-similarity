@@ -14,20 +14,16 @@ function main() {
   const targetRoot = resolveTargetRoot(args);
   const packageRoot = path.resolve(__dirname, "..");
   const sourceSkill = path.join(packageRoot, "skills", SKILL_NAME);
-  const sourceCore = path.join(packageRoot, "checksim");
   const destSkill = path.join(targetRoot, SKILL_NAME);
-  const destVendor = path.join(destSkill, "scripts", "vendor", "checksim");
 
   assertDirectory(sourceSkill, "Skill source");
-  assertDirectory(sourceCore, "checksim core source");
+  assertDirectory(path.join(sourceSkill, "scripts", "vendor", "checksim"), "Skill bundled checksim core");
   fs.mkdirSync(targetRoot, { recursive: true });
 
   if (fs.existsSync(destSkill)) {
     fs.rmSync(destSkill, { recursive: true, force: true });
   }
-  copyRecursive(sourceSkill, destSkill, new Set(["vendor"]));
-  fs.mkdirSync(path.dirname(destVendor), { recursive: true });
-  copyRecursive(sourceCore, destVendor);
+  copyRecursive(sourceSkill, destSkill);
 
   console.log(`Installed ${SKILL_NAME} to: ${destSkill}`);
   console.log("");
@@ -54,11 +50,11 @@ function resolveTargetRoot(args) {
 }
 
 function copyRecursive(source, dest, ignoredNames = new Set()) {
+  if (shouldSkip(source, ignoredNames)) {
+    return;
+  }
   const stat = fs.statSync(source);
   if (stat.isDirectory()) {
-    if (ignoredNames.has(path.basename(source))) {
-      return;
-    }
     fs.mkdirSync(dest, { recursive: true });
     for (const entry of fs.readdirSync(source)) {
       copyRecursive(path.join(source, entry), path.join(dest, entry), ignoredNames);
@@ -66,6 +62,11 @@ function copyRecursive(source, dest, ignoredNames = new Set()) {
     return;
   }
   fs.copyFileSync(source, dest);
+}
+
+function shouldSkip(source, ignoredNames) {
+  const name = path.basename(source);
+  return ignoredNames.has(name) || name === "__pycache__" || name.endsWith(".pyc") || name.endsWith(".pyo");
 }
 
 function assertDirectory(dir, label) {
