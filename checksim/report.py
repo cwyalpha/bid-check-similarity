@@ -15,9 +15,11 @@ def write_report_bundle(result: dict[str, Any], output_dir: str | Path) -> dict[
     output.mkdir(parents=True, exist_ok=True)
     result_path = output / "result.json"
     report_path = output / "report.html"
+    ai_summary_path = output / "ai_summary.json"
     compare_pages = _write_compare_pages(result, output)
     paths = {
         "result_json": str(result_path),
+        "ai_summary_json": str(ai_summary_path),
         "report_html": str(report_path),
         "output_dir": str(output),
         "compare_pages": compare_pages,
@@ -25,6 +27,9 @@ def write_report_bundle(result: dict[str, Any], output_dir: str | Path) -> dict[
     }
     result["output_files"] = paths
     result.setdefault("performance", {}).setdefault("stage_seconds", {})["report"] = round(time.perf_counter() - started, 3)
+    ai_summary = build_ai_summary(result)
+    ai_summary_path.write_text(json.dumps(ai_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    paths["ai_summary_json_bytes"] = ai_summary_path.stat().st_size
     report_path.write_text(render_report(result), encoding="utf-8")
     paths["report_html_bytes"] = report_path.stat().st_size
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -32,6 +37,207 @@ def write_report_bundle(result: dict[str, Any], output_dir: str | Path) -> dict[
     result["output_files"] = paths
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return paths
+
+
+def build_ai_summary(result: dict[str, Any]) -> dict[str, Any]:
+    matches = result.get("matches", [])
+    active_matches = [match for match in matches if not match.get("excluded")]
+    excluded_matches = [match for match in matches if match.get("excluded")]
+    return {
+        "schema": "checksim.ai_summary.v1",
+        "purpose": "供 AI/Agent 快速判断是否存在疑似重复、共享关键词或重复图片；完整结果见 result.json，人工复核见 report.html 和 compare_*.html。",
+        "generated_at": result.get("generated_at", ""),
+        "stats": _ai_stats(result),
+        "output_files": _ai_output_files(result),
+        "options": result.get("options", {}),
+        "pair_summaries": _ai_pair_summaries(result),
+        "evidence": {
+            "similar_text": _ai_match_samples(active_matches, result, per_pair_limit=20, total_limit=160),
+            "excluded_text": _ai_match_samples(excluded_matches, result, per_pair_limit=8, total_limit=80),
+            "keyword_alerts": _ai_keyword_alerts(result),
+            "image_duplicates": _ai_image_duplicates(result),
+        },
+        "limits": {
+            "similar_text_per_pair": 20,
+            "similar_text_total": 160,
+            "excluded_text_per_pair": 8,
+            "excluded_text_total": 80,
+            "keyword_hits_per_rule": 10,
+            "image_duplicate_groups": 30,
+            "text_chars_per_side": 320,
+        },
+    }
+
+
+def _ai_stats(result: dict[str, Any]) -> dict[str, Any]:
+    stats = result.get("stats", {})
+    return {
+        "group_count": stats.get("group_count", 0),
+        "document_count": stats.get("document_count", 0),
+        "exclude_document_count": stats.get("exclude_document_count", 0),
+        "unit_count": stats.get("unit_count", 0),
+        "comparable_unit_count": stats.get("comparable_unit_count", 0),
+        "short_filtered_unit_count": stats.get("short_filtered_unit_count", 0),
+        "similar_match_count": stats.get("similar_match_count", 0),
+        "excluded_match_count": stats.get("excluded_match_count", 0),
+        "keyword_alert_count": stats.get("keyword_alert_count", 0),
+        "image_duplicate_count": stats.get("image_duplicate_count", 0),
+        "has_abnormal_similarity": bool(stats.get("similar_match_count", 0)),
+        "has_keyword_alerts": bool(stats.get("keyword_alert_count", 0)),
+        "has_image_duplicates": bool(stats.get("image_duplicate_count", 0)),
+    }
+
+
+def _ai_output_files(result: dict[str, Any]) -> dict[str, Any]:
+    output_files = result.get("output_files", {})
+    return {
+        "report_html": output_files.get("report_html", ""),
+        "ai_summary_json": output_files.get("ai_summary_json", ""),
+        "result_json": output_files.get("result_json", ""),
+        "output_dir": output_files.get("output_dir", ""),
+        "compare_pages": [
+            {
+                "group_a": page.get("group_a", ""),
+                "group_b": page.get("group_b", ""),
+                "path": page.get("path", ""),
+                "file_name": page.get("file_name", ""),
+                "match_count": page.get("match_count", 0),
+                "excluded_count": page.get("excluded_count", 0),
+            }
+            for page in output_files.get("compare_pages", [])
+        ],
+    }
+
+
+def _ai_pair_summaries(result: dict[str, Any]) -> list[dict[str, Any]]:
+    compare_map = {
+        (page.get("group_a"), page.get("group_b")): page
+        for page in result.get("output_files", {}).get("compare_pages", [])
+    }
+    summaries = []
+    for item in result.get("pair_summaries", []):
+        page = compare_map.get((item.get("group_a"), item.get("group_b")), {})
+        summaries.append(
+            {
+                "group_a": item.get("group_a", ""),
+                "group_b": item.get("group_b", ""),
+                "similar_match_count": item.get("match_count", 0),
+                "excluded_match_count": item.get("excluded_count", 0),
+                "max_similarity": item.get("max_similarity", 0),
+                "avg_similarity": item.get("avg_similarity", 0),
+                "compare_page": page.get("path", ""),
+            }
+        )
+    return summaries
+
+
+def _ai_match_samples(
+    matches: list[dict[str, Any]],
+    result: dict[str, Any],
+    per_pair_limit: int,
+    total_limit: int,
+) -> dict[str, Any]:
+    compare_map = {
+        (page.get("group_a"), page.get("group_b")): page.get("path", "")
+        for page in result.get("output_files", {}).get("compare_pages", [])
+    }
+    sorted_matches = sorted(matches, key=lambda item: (-float(item.get("similarity", 0) or 0), item.get("match_id", "")))
+    pair_counts: dict[tuple[str, str], int] = {}
+    samples: list[dict[str, Any]] = []
+    omitted_by_pair: dict[str, int] = {}
+    for match in sorted_matches:
+        pair = (match.get("group_a", ""), match.get("group_b", ""))
+        pair_label = f"{pair[0]} VS {pair[1]}"
+        current_count = pair_counts.get(pair, 0)
+        if len(samples) >= total_limit or current_count >= per_pair_limit:
+            omitted_by_pair[pair_label] = omitted_by_pair.get(pair_label, 0) + 1
+            continue
+        pair_counts[pair] = current_count + 1
+        samples.append(
+            {
+                "match_id": match.get("match_id", ""),
+                "group_a": match.get("group_a", ""),
+                "group_b": match.get("group_b", ""),
+                "file_a": Path(match.get("file_a", "")).name,
+                "file_b": Path(match.get("file_b", "")).name,
+                "location_a": match.get("location_a", ""),
+                "location_b": match.get("location_b", ""),
+                "similarity": match.get("similarity", 0),
+                "excluded": bool(match.get("excluded")),
+                "exclude_reason": match.get("exclude_reason") or "",
+                "text_a": _shorten_ai_text(match.get("text_a", "")),
+                "text_b": _shorten_ai_text(match.get("text_b", "")),
+                "compare_page": compare_map.get(pair, ""),
+            }
+        )
+    return {
+        "total_count": len(matches),
+        "sample_count": len(samples),
+        "omitted_count": max(0, len(matches) - len(samples)),
+        "omitted_by_pair": omitted_by_pair,
+        "samples": samples,
+    }
+
+
+def _ai_keyword_alerts(result: dict[str, Any]) -> list[dict[str, Any]]:
+    alerts = []
+    for alert in result.get("keyword_alerts", []):
+        hits = alert.get("hits", [])
+        alerts.append(
+            {
+                "keyword": alert.get("keyword", ""),
+                "is_regex": bool(alert.get("is_regex")),
+                "groups": alert.get("groups", []),
+                "hit_count": len(hits),
+                "sample_hits": [
+                    {
+                        "group_name": hit.get("group_name", ""),
+                        "file_name": hit.get("file_name", ""),
+                        "location": hit.get("location", ""),
+                        "snippet": _shorten_ai_text(hit.get("snippet", ""), 220),
+                    }
+                    for hit in hits[:10]
+                ],
+                "omitted_hit_count": max(0, len(hits) - 10),
+            }
+        )
+    return alerts
+
+
+def _ai_image_duplicates(result: dict[str, Any]) -> dict[str, Any]:
+    duplicates = result.get("image_duplicates", [])
+    samples = []
+    for duplicate in duplicates[:30]:
+        samples.append(
+            {
+                "kind": duplicate.get("kind", ""),
+                "distance": duplicate.get("distance", 0),
+                "images": [
+                    {
+                        "group_name": image.get("group_name", ""),
+                        "file_name": image.get("file_name", ""),
+                        "image_id": image.get("image_id", ""),
+                        "source": image.get("source", ""),
+                    }
+                    for image in duplicate.get("images", [])
+                ],
+            }
+        )
+    return {
+        "total_count": len(duplicates),
+        "sample_count": len(samples),
+        "omitted_count": max(0, len(duplicates) - len(samples)),
+        "samples": samples,
+    }
+
+
+def _shorten_ai_text(value: Any, limit: int = 320) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    head = max(1, limit // 2 - 8)
+    tail = max(1, limit - head - 5)
+    return text[:head] + " ... " + text[-tail:]
 
 
 def render_report(result: dict[str, Any]) -> str:
@@ -100,11 +306,15 @@ def _run_summary(result: dict[str, Any]) -> str:
     stats = result.get("stats", {})
     performance = result.get("performance", {})
     stage = performance.get("stage_seconds", {})
+    output_files = result.get("output_files", {})
     rows = [
         ("总耗时", f"{performance.get('engine_seconds', 0)} 秒"),
         ("解析投标文件", f"{stage.get('parse_documents', 0)} 秒"),
         ("相似度计算", f"{stage.get('similarity', 0)} 秒"),
         ("报告生成", f"{stage.get('report', 0)} 秒"),
+        ("总览报告", output_files.get("report_html", "")),
+        ("AI 精简结果", output_files.get("ai_summary_json", "")),
+        ("完整 JSON", output_files.get("result_json", "")),
     ]
     body = "".join(f"<tr><th>{escape(str(name))}</th><td>{escape(str(value))}</td></tr>" for name, value in rows)
     return f"""

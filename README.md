@@ -9,7 +9,7 @@
 - 支持重要关键词和 `re:` 正则规则；同一规则命中 2 个及以上公司组即提示异常。
 - 支持短文本过滤、文本相似阈值、排除文件阈值、分段符号等参数设置。
 - 支持 `.doc/.wps` 自动转换：Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试，Linux/macOS 下使用 LibreOffice。
-- 生成 `report.html`、`result.json` 和按组对生成的 `compare_*.html` 左右对照页，结果默认全量写入。
+- 生成 `report.html`、`ai_summary.json`、`result.json` 和按组对生成的 `compare_*.html` 左右对照页，完整结果默认全量写入。
 - HTML 报告的 CSS/JS 均内嵌，不依赖 CDN，适合内网离线使用。
 
 ## 桌面版
@@ -112,7 +112,10 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Lin
 
 - `report.html`：总览报告，包含统计、参数、两两比对、关键词异常、图片重复和明细。
 - `compare_*.html`：两组文件左右对照页，支持点击高亮片段跳转到对侧对应片段。
+- `ai_summary.json`：给 AI/Agent 优先阅读的精简结果，包含统计、输出路径、组对摘要、代表性重复片段、关键词异常和图片重复样例。
 - `result.json`：完整结构化结果，包含全量相似片段、关键词异常、图片重复和统计信息。
+
+`ai_summary.json` 用于快速判断是否需要人工复核；它不会替代全量结果。需要逐条追溯时，请打开 `report.html`、对应 `compare_*.html` 或读取 `result.json`。
 
 左右对照页中，高亮颜色越深表示相似度越高；已排除片段颜色更淡。左右两栏可独立滚动，并支持“上一个/下一个高亮”导航。
 

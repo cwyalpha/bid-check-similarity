@@ -5,21 +5,21 @@ description: 离线标书和文件查重 Skill，支持按公司/投标单位分
 
 # bid-check-similarity
 
-使用本 Skill 调用本地 `checksim` 引擎进行标书或通用文件查重。引擎完全离线运行：解析分组文档、过滤短文本后做相似度比对、应用可选排除文件、检测共享关键词/正则、检查重复图片，并输出 `report.html`、`result.json` 和按组对生成的 `compare_*.html`。结果默认全量写入 `result.json` 和 HTML 报告。
+使用本 Skill 调用本地 `checksim` 引擎进行标书或通用文件查重。引擎完全离线运行：解析分组文档、过滤短文本后做相似度比对、应用可选排除文件、检测共享关键词/正则、检查重复图片，并输出 `report.html`、`ai_summary.json`、`result.json` 和按组对生成的 `compare_*.html`。完整结果默认全量写入 `result.json` 和 HTML 报告。
 
 ## 工作流程
 
 1. 确认或推断输入分组。每组代表一家投标单位，可包含一个或多个 `.docx`、`.doc`、`.wps`、`.md`、`.txt` 文件。
 2. 根据需要添加排除文件，例如招标文件、模板文件、统一格式要求等允许共享的内容。
 3. 根据需要添加重要关键词或正则规则。正则规则必须以 `re:` 开头。
-4. 生成 JSON 配置。字段结构和默认参数见 `references/config-schema.md`。
+4. 生成 JSON 配置。字段结构和默认参数见本文“配置 JSON 参考”。
 5. 调用内置 CLI。若用户未指定输出目录，优先在当前项目目录运行命令，让默认结果写入当前目录下的 `outputs/run_时间戳`：
 
 ```bash
 python path/to/skill/scripts/run_check.py --config case.json --output outputs/run_001
 ```
 
-6. 回复时优先给出生成的 `report.html` 路径，再概述异常相似片段、已排除片段、关键词异常和旧格式转换限制。
+6. 检测完成后先读取 `ai_summary.json`，再回复生成的 `report.html` 路径，并概述异常相似片段、已排除片段、关键词异常和旧格式转换限制。
 
 ## Agent 参数设置建议
 
@@ -46,8 +46,60 @@ python path/to/skill/scripts/run_check.py --config case.json --output outputs/ru
 ## 输出要求
 
 - `report.html`：离线总览报告，CSS/JS 内嵌。
+- `ai_summary.json`：给 AI/Agent 优先阅读的精简结果，包含统计、输出路径、组对摘要、代表性相似片段、关键词异常样例和图片重复样例。
 - `compare_*.html`：两组文件左右对照页，支持高亮文本双向跳转。
-- `result.json`：完整结构化结果，保存全量相似片段和统计。
+- `result.json`：完整结构化结果，保存全量相似片段和统计，可能很长；只有需要追溯全部文本单元或全部匹配时再读取。
+
+Agent 回复用户时，建议先读取 `ai_summary.json` 判断是否存在疑似重复，再把 `report.html` 和相关 `compare_*.html` 路径给用户。`ai_summary.json` 的 `evidence.similar_text.samples` 是异常相似片段样例，`evidence.excluded_text.samples` 是被排除文件解释覆盖的相似片段样例，`evidence.keyword_alerts` 是跨 2 组以上命中的关键词/正则异常。
+
+## 配置 JSON 参考
+
+最小示例：
+
+```json
+{
+  "groups": [
+    {"name": "A公司", "files": ["/project/cases/A/投标文件.docx"]},
+    {"name": "B公司", "files": ["/project/cases/B/投标文件.md", "/project/cases/B/补充说明.txt"]}
+  ],
+  "exclude_files": ["/project/cases/招标文件.docx"],
+  "keywords": ["某某科技有限公司", "re:1[3-9]\\d{9}"],
+  "options": {
+    "min_chars": 10,
+    "min_words": 8,
+    "similarity_threshold": 0.78,
+    "exclude_threshold": 0.86,
+    "sentence_delimiters": "。！？!?；;",
+    "soft_delimiters": "，,、：:",
+    "similarity_backend": "local_ngrams",
+    "image_ahash_distance": 6,
+    "legacy_conversion_timeout": 120,
+    "soffice_path": ""
+  }
+}
+```
+
+字段说明：
+
+- `groups`: 必填，至少 2 组；每组代表一家投标单位，可包含多个 `.docx/.doc/.wps/.md/.txt` 文件。
+- `exclude_files`: 可选，招标文件、模板、统一格式要求等允许复用内容。
+- `keywords`: 可选，普通文本按字面量匹配，`re:` 前缀按正则匹配。
+- `min_chars`: 中文/混合短文本过滤阈值，低于该长度不参与文本相似度比对，默认 `10`。
+- `min_words`: 英文短文本过滤阈值，低于该词数不参与文本相似度比对。
+- `similarity_threshold`: 跨组文本相似阈值，默认 `0.78`。
+- `exclude_threshold`: 排除文件匹配阈值，默认 `0.86`。
+- `sentence_delimiters`: 强分段符号。
+- `soft_delimiters`: 长句辅助切分符号。
+- `similarity_backend`: 相似度后端，当前只支持 `local_ngrams`；`embedding` 仅预留，尚未启用。
+- `image_ahash_distance`: 图片近似重复 aHash 汉明距离。
+- `legacy_conversion_timeout`: `.doc/.wps` 转换超时时间，单位秒。
+- `soffice_path`: 可选，手动指定 LibreOffice `soffice` 可执行文件路径。
+
+运行说明：
+
+- 如果命令未指定 `--output`，报告默认写入当前工作目录下的 `outputs/run_时间戳`。
+- 在 opencode 等 agent 中使用时，建议在项目根目录运行 CLI，这样报告会留在该项目文件夹内。
+- `result.json` 默认保存全量相似明细，不需要额外开启全量导出。
 
 不要比较同一组内部文件。不要把短文本过滤用于关键词检测；关键词和正则必须基于全文检测。
 不要选择 `similarity_backend="embedding"`；该接口目前仅预留，本版本只启用 `local_ngrams`。

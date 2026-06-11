@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,13 +81,24 @@ class CheckSimEngineTest(unittest.TestCase):
             all_units = {unit["unit_id"] for doc in result["documents"] for unit in doc["units"]}
             self.assertTrue(all(match["unit_id_a"] in all_units and match["unit_id_b"] in all_units for match in result["matches"]))
             self.assertTrue(result["output_files"]["compare_pages"])
+            self.assertIn("ai_summary_json", result["output_files"])
+            self.assertGreater(result["output_files"]["ai_summary_json_bytes"], 0)
 
             report_html = Path(result["output_files"]["report_html"]).read_text(encoding="utf-8")
             self.assertIn("<style>", report_html)
             self.assertIn("<script>", report_html)
             self.assertIn("左右对照", report_html)
+            self.assertIn("AI 精简结果", report_html)
             self.assertNotIn("cdn.jsdelivr", report_html)
             self.assertNotIn("https://", report_html)
+
+            ai_summary = json.loads(Path(result["output_files"]["ai_summary_json"]).read_text(encoding="utf-8"))
+            self.assertEqual(ai_summary["schema"], "checksim.ai_summary.v1")
+            self.assertEqual(ai_summary["output_files"]["report_html"], result["output_files"]["report_html"])
+            self.assertEqual(ai_summary["output_files"]["result_json"], result["output_files"]["result_json"])
+            self.assertGreaterEqual(ai_summary["evidence"]["similar_text"]["sample_count"], 1)
+            self.assertGreaterEqual(ai_summary["evidence"]["keyword_alerts"][0]["hit_count"], 2)
+            self.assertNotIn("documents", ai_summary)
 
             compare_path = Path(result["output_files"]["compare_pages"][0]["path"])
             compare_html = compare_path.read_text(encoding="utf-8")
@@ -266,9 +278,13 @@ class CheckSimEngineTest(unittest.TestCase):
 
             output_files = result["output_files"]
             self.assertNotIn("all_matches_jsonl", output_files)
+            self.assertTrue(Path(output_files["ai_summary_json"]).exists())
 
             result_json = Path(output_files["result_json"]).read_text(encoding="utf-8")
             self.assertNotIn('"_all_matches"', result_json)
+            ai_summary = json.loads(Path(output_files["ai_summary_json"]).read_text(encoding="utf-8"))
+            self.assertEqual(ai_summary["stats"]["similar_match_count"], stats["similar_match_count"])
+            self.assertLess(Path(output_files["ai_summary_json"]).stat().st_size, Path(output_files["result_json"]).stat().st_size)
             report_html = Path(output_files["report_html"]).read_text(encoding="utf-8")
             self.assertNotIn("已截断", report_html)
             self.assertNotIn("all_matches.jsonl", report_html)

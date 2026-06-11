@@ -37,12 +37,14 @@ def main(argv: list[str] | None = None) -> int:
         result_path = output_dir / "result.json"
         result = json.loads(result_path.read_text(encoding="utf-8"))
         report_path = output_dir / "report.html"
+        ai_summary_path = output_dir / "ai_summary.json"
         metrics = {
             "mode": args.mode,
             "elapsed_seconds": round(elapsed, 3),
             "groups": args.groups,
             "chars_per_file": args.chars_per_file,
             "stats": result.get("stats", {}),
+            "ai_summary_json_bytes": _file_size(ai_summary_path),
             "report_html_bytes": _file_size(report_path),
             "result_json_bytes": _file_size(result_path),
             "output_dir": str(output_dir),
