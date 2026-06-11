@@ -49,6 +49,8 @@ def parse_file(
         return _parse_docx(resolved, group_name, group_index, options)
     if suffix in {".doc", ".wps"}:
         return _parse_legacy_word(resolved, group_name, group_index, options, progress)
+    if suffix == ".txt":
+        return _parse_text(resolved, group_name, group_index, options)
     return _parse_markdown(resolved, group_name, group_index, options)
 
 
@@ -108,6 +110,14 @@ def _parse_markdown(path: Path, group_name: str, group_index: int, options: Chec
     metadata = _file_metadata(path)
     units = _build_units(path, group_name, group_index, blocks, options)
     return DocumentData(group_name, group_index, normalize_path(path), path.name, metadata, blocks, units, images)
+
+
+def _parse_text(path: Path, group_name: str, group_index: int, options: CheckOptions) -> DocumentData:
+    raw = _read_text(path)
+    blocks = [line.strip() for line in re.split(r"\n{1,}", raw) if line.strip()]
+    metadata = _file_metadata(path)
+    units = _build_units(path, group_name, group_index, blocks, options)
+    return DocumentData(group_name, group_index, normalize_path(path), path.name, metadata, blocks, units, [])
 
 
 def _build_units(path: Path, group_name: str, group_index: int, blocks: list[str], options: CheckOptions) -> list[TextUnit]:

@@ -16,16 +16,55 @@ from .models import CheckOptions, SUPPORTED_EXTENSIONS, normalize_path
 
 
 SUPPORTED_FILETYPES = [
-    ("支持的文件", "*.docx *.doc *.wps *.md"),
+    ("支持的文件", "*.docx *.doc *.wps *.md *.txt"),
     ("Word/WPS", "*.docx *.doc *.wps"),
     ("Markdown", "*.md"),
+    ("Text", "*.txt"),
 ]
 
 
-REPORT_PRESETS = {
-    "快速": {"max_matches_per_pair": 200, "max_excluded_matches_per_pair": 50},
-    "平衡": {"max_matches_per_pair": 600, "max_excluded_matches_per_pair": 200},
-    "详细": {"max_matches_per_pair": 1500, "max_excluded_matches_per_pair": 500},
+PARAM_HELP = {
+    "keywords": (
+        "重要关键词/正则",
+        "每行一条规则。普通文本按字面量匹配；以 re: 开头时按正则匹配。"
+        "关键词不受短文本过滤影响，只要同一规则出现在 2 个及以上公司/分组中，就会在报告中标为异常。"
+        "建议填写公司名称、法人/负责人、项目人员姓名、手机号、统一社会信用代码、供应商专有产品名等。",
+    ),
+    "min_chars": (
+        "中文/混合最短字符",
+        "中文或中英混合片段参与相似度比对的最短可见字符数。默认 10。"
+        "低于该长度的标题、编号、目录项等不参与文本相似度比对，但仍参与关键词/正则检测。",
+    ),
+    "min_words": (
+        "英文最短词数",
+        "纯英文片段参与相似度比对的最短英文词数。默认 8。"
+        "低于该词数的短句不参与相似度比对，但仍参与关键词/正则检测。",
+    ),
+    "similarity_threshold": (
+        "文本相似阈值",
+        "跨公司/分组文本片段达到该相似度就会标为异常。默认 0.78。"
+        "数值越高越严格，越低越容易发现轻微改写但也可能增加噪声。",
+    ),
+    "exclude_threshold": (
+        "排除文件阈值",
+        "相似片段两侧如果都能以该阈值匹配到招标文件、模板等排除文件，就会标为已排除。默认 0.86。"
+        "通常建议高于文本相似阈值。",
+    ),
+    "image_ahash_distance": (
+        "图片近似距离",
+        "图片 aHash 感知哈希的汉明距离阈值。默认 6。"
+        "距离越小越严格；精确 SHA256 重复始终会被检测。",
+    ),
+    "sentence_delimiters": (
+        "强分段符号",
+        "遇到这些符号会优先切分比较片段。默认包含句号、问号、叹号和中英文分号。"
+        "如果标书常用冒号或换行承载完整条款，可按需要补充。",
+    ),
+    "soft_delimiters": (
+        "长句辅助切分",
+        "当单个片段过长时，用这些符号辅助切分。默认包含逗号、顿号和冒号。"
+        "它只用于长句拆分，不会替代强分段符号。",
+    ),
 }
 
 
@@ -83,16 +122,7 @@ class CheckSimApp(ttk.Frame):
         self.image_ahash_distance = tk.StringVar(value=str(defaults.image_ahash_distance))
         self.sentence_delimiters = tk.StringVar(value=defaults.sentence_delimiters)
         self.soft_delimiters = tk.StringVar(value=defaults.soft_delimiters)
-        self.report_preset = tk.StringVar(value="平衡")
-        self.max_matches_per_pair = tk.StringVar(value=str(defaults.max_matches_per_pair))
-        self.max_excluded_matches_per_pair = tk.StringVar(value=str(defaults.max_excluded_matches_per_pair))
-        self.max_targets_per_unit = tk.StringVar(value=str(defaults.max_targets_per_unit))
-        self.write_all_matches = tk.BooleanVar(value=defaults.write_all_matches)
-        self.candidate_shared_ratio = tk.StringVar(value=str(defaults.candidate_shared_ratio))
-        self.exclude_candidates_per_unit = tk.StringVar(value=str(defaults.exclude_candidates_per_unit))
-        self.min_length_ratio = tk.StringVar(value=str(defaults.min_length_ratio))
         self.similarity_backend = tk.StringVar(value=defaults.similarity_backend)
-        self.show_advanced = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="就绪")
 
         self._build()
@@ -164,56 +194,29 @@ class CheckSimApp(ttk.Frame):
     def _build_keywords_and_options(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="3. 关键词与检测参数")
         frame.pack(fill="x", expand=False)
-        ttk.Label(frame, text="重要关键词/正则，每行一条；正则请用 re: 开头").pack(anchor="w", padx=8, pady=(8, 2))
+        keyword_header = ttk.Frame(frame)
+        keyword_header.pack(fill="x", padx=8, pady=(8, 2))
+        ttk.Label(keyword_header, text="重要关键词/正则，每行一条；正则请用 re: 开头").pack(side=LEFT)
+        ttk.Button(
+            keyword_header,
+            text="?",
+            width=2,
+            command=lambda: self._show_param_help("keywords"),
+        ).pack(side=LEFT, padx=(6, 0))
         self.keyword_text = tk.Text(frame, height=4, wrap="word")
         self.keyword_text.pack(fill="x", padx=8, pady=(0, 8))
 
-        preset_row = ttk.Frame(frame)
-        preset_row.pack(fill="x", padx=8, pady=(0, 8))
-        ttk.Label(preset_row, text="报告预设").pack(side=LEFT, padx=(0, 6))
-        preset_combo = ttk.Combobox(
-            preset_row,
-            textvariable=self.report_preset,
-            values=list(REPORT_PRESETS) + ["自定义"],
-            width=8,
-            state="readonly",
-        )
-        preset_combo.pack(side=LEFT, padx=(0, 12))
-        preset_combo.bind("<<ComboboxSelected>>", lambda _event: self._apply_report_preset())
-        ttk.Checkbutton(
-            preset_row,
-            text="显示高级参数",
-            variable=self.show_advanced,
-            command=self._toggle_advanced_options,
-        ).pack(side=LEFT)
-
         options = ttk.Frame(frame)
         options.pack(fill="x", padx=8, pady=(0, 8))
-        self._option_entry(options, "中文/混合最短字符", self.min_chars, 0, 0)
-        self._option_entry(options, "英文最短词数", self.min_words, 0, 2)
-        self._option_entry(options, "文本相似阈值", self.similarity_threshold, 1, 0)
-        self._option_entry(options, "排除文件阈值", self.exclude_threshold, 1, 2)
-        self._option_entry(options, "图片近似距离", self.image_ahash_distance, 2, 0)
-        self._option_entry(options, "强分段符号", self.sentence_delimiters, 2, 2)
-        self._option_entry(options, "长句辅助切分", self.soft_delimiters, 3, 0)
+        self._option_entry(options, "中文/混合最短字符", self.min_chars, 0, 0, "min_chars")
+        self._option_entry(options, "英文最短词数", self.min_words, 0, 3, "min_words")
+        self._option_entry(options, "文本相似阈值", self.similarity_threshold, 1, 0, "similarity_threshold")
+        self._option_entry(options, "排除文件阈值", self.exclude_threshold, 1, 3, "exclude_threshold")
+        self._option_entry(options, "图片近似距离", self.image_ahash_distance, 2, 0, "image_ahash_distance")
+        self._option_entry(options, "强分段符号", self.sentence_delimiters, 2, 3, "sentence_delimiters")
+        self._option_entry(options, "长句辅助切分", self.soft_delimiters, 3, 0, "soft_delimiters")
         options.columnconfigure(1, weight=1)
-        options.columnconfigure(3, weight=1)
-
-        self.advanced_options = ttk.Frame(frame)
-        self._option_entry(self.advanced_options, "异常上限/组对", self.max_matches_per_pair, 0, 0)
-        self._option_entry(self.advanced_options, "排除上限/组对", self.max_excluded_matches_per_pair, 0, 2)
-        self._option_entry(self.advanced_options, "单片段目标上限", self.max_targets_per_unit, 1, 0)
-        self._option_entry(self.advanced_options, "排除候选上限", self.exclude_candidates_per_unit, 1, 2)
-        self._option_entry(self.advanced_options, "共享ngram比例", self.candidate_shared_ratio, 2, 0)
-        self._option_entry(self.advanced_options, "最小长度比例", self.min_length_ratio, 2, 2)
-        self._option_entry(self.advanced_options, "相似度后端", self.similarity_backend, 3, 0)
-        ttk.Checkbutton(
-            self.advanced_options,
-            text="同时导出全量 all_matches.jsonl",
-            variable=self.write_all_matches,
-        ).grid(row=3, column=2, columnspan=2, sticky="w", pady=4)
-        self.advanced_options.columnconfigure(1, weight=1)
-        self.advanced_options.columnconfigure(3, weight=1)
+        options.columnconfigure(4, weight=1)
 
     def _build_run_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="4. 检测与报告")
@@ -248,22 +251,20 @@ class CheckSimApp(ttk.Frame):
         ttk.Button(buttons, text="复制路径", command=self._copy_selected_history_path).pack(side=LEFT, padx=(0, 6))
         ttk.Button(buttons, text="删除记录", command=self._delete_selected_history).pack(side=LEFT)
 
-    def _option_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, row: int, column: int) -> None:
+    def _option_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, row: int, column: int, help_key: str) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=column, sticky="w", padx=(0, 6), pady=4)
-        ttk.Entry(parent, textvariable=variable, width=12).grid(row=row, column=column + 1, sticky="ew", padx=(0, 14), pady=4)
+        ttk.Entry(parent, textvariable=variable, width=12).grid(row=row, column=column + 1, sticky="ew", padx=(0, 4), pady=4)
+        ttk.Button(parent, text="?", width=2, command=lambda: self._show_param_help(help_key)).grid(
+            row=row,
+            column=column + 2,
+            sticky="w",
+            padx=(0, 14),
+            pady=4,
+        )
 
-    def _apply_report_preset(self) -> None:
-        preset = REPORT_PRESETS.get(self.report_preset.get())
-        if not preset:
-            return
-        self.max_matches_per_pair.set(str(preset["max_matches_per_pair"]))
-        self.max_excluded_matches_per_pair.set(str(preset["max_excluded_matches_per_pair"]))
-
-    def _toggle_advanced_options(self) -> None:
-        if self.show_advanced.get():
-            self.advanced_options.pack(fill="x", padx=8, pady=(0, 8))
-        else:
-            self.advanced_options.pack_forget()
+    def _show_param_help(self, key: str) -> None:
+        title, text = PARAM_HELP.get(key, ("参数说明", "暂无说明。"))
+        messagebox.showinfo(title, text, parent=self.master)
 
     def _add_file_group(self) -> None:
         files = filedialog.askopenfilenames(
@@ -289,7 +290,7 @@ class CheckSimApp(ttk.Frame):
         folder_path = Path(folder)
         files = _find_supported_files(folder_path)
         if not files:
-            messagebox.showwarning("未找到文件", "该目录下没有 .docx、.doc、.wps 或 .md 文件。")
+            messagebox.showwarning("未找到文件", "该目录下没有 .docx、.doc、.wps、.md 或 .txt 文件。")
             return
         name = simpledialog.askstring("分组名称", "请输入公司/分组名称", initialvalue=folder_path.name, parent=self.master)
         if not name:
@@ -323,7 +324,7 @@ class CheckSimApp(ttk.Frame):
             "批量文件夹成组",
             "请选择“包含多个公司文件夹的上级目录”。\n\n"
             "程序会把该目录下的每个直接子文件夹作为一个公司/分组，"
-            "并递归导入子文件夹中的 .docx、.doc、.wps、.md 文件。\n\n"
+            "并递归导入子文件夹中的 .docx、.doc、.wps、.md、.txt 文件。\n\n"
             "如果只想添加某一家公司的单个目录，请使用“按目录添加组”。",
             parent=self.master,
         )
@@ -334,7 +335,7 @@ class CheckSimApp(ttk.Frame):
             return
         groups, empty_folders = _groups_from_company_folders(Path(folder))
         if not groups:
-            messagebox.showwarning("未找到文件", "该目录的直接子文件夹中没有 .docx、.doc、.wps 或 .md 文件。")
+            messagebox.showwarning("未找到文件", "该目录的直接子文件夹中没有 .docx、.doc、.wps、.md 或 .txt 文件。")
             return
         added, skipped = self._append_groups(groups)
         if added:
@@ -497,13 +498,6 @@ class CheckSimApp(ttk.Frame):
             "image_ahash_distance": _parse_int(self.image_ahash_distance.get(), "图片近似距离"),
             "sentence_delimiters": self.sentence_delimiters.get(),
             "soft_delimiters": self.soft_delimiters.get(),
-            "max_matches_per_pair": _parse_int(self.max_matches_per_pair.get(), "异常上限/组对"),
-            "max_excluded_matches_per_pair": _parse_int(self.max_excluded_matches_per_pair.get(), "排除上限/组对"),
-            "max_targets_per_unit": _parse_int(self.max_targets_per_unit.get(), "单片段目标上限"),
-            "write_all_matches": self.write_all_matches.get(),
-            "candidate_shared_ratio": _parse_ratio(self.candidate_shared_ratio.get(), "共享ngram比例"),
-            "exclude_candidates_per_unit": _parse_int(self.exclude_candidates_per_unit.get(), "排除候选上限"),
-            "min_length_ratio": _parse_ratio(self.min_length_ratio.get(), "最小长度比例"),
             "similarity_backend": self.similarity_backend.get().strip() or "local_ngrams",
         }
         options = CheckOptions.from_dict(options).to_dict()
@@ -569,15 +563,7 @@ class CheckSimApp(ttk.Frame):
         self.image_ahash_distance.set(str(options.image_ahash_distance))
         self.sentence_delimiters.set(options.sentence_delimiters)
         self.soft_delimiters.set(options.soft_delimiters)
-        self.max_matches_per_pair.set(str(options.max_matches_per_pair))
-        self.max_excluded_matches_per_pair.set(str(options.max_excluded_matches_per_pair))
-        self.max_targets_per_unit.set(str(options.max_targets_per_unit))
-        self.write_all_matches.set(options.write_all_matches)
-        self.candidate_shared_ratio.set(str(options.candidate_shared_ratio))
-        self.exclude_candidates_per_unit.set(str(options.exclude_candidates_per_unit))
-        self.min_length_ratio.set(str(options.min_length_ratio))
         self.similarity_backend.set(options.similarity_backend)
-        self.report_preset.set(_preset_for_limits(options.max_matches_per_pair, options.max_excluded_matches_per_pair))
 
     def _open_report(self) -> None:
         if not self.last_report:
@@ -731,13 +717,6 @@ def _group_file_signature(group: dict[str, object]) -> tuple[str, ...]:
     return tuple(sorted(normalize_path(str(file)) for file in files))
 
 
-def _preset_for_limits(max_matches: int, max_excluded: int) -> str:
-    for name, values in REPORT_PRESETS.items():
-        if values["max_matches_per_pair"] == max_matches and values["max_excluded_matches_per_pair"] == max_excluded:
-            return name
-    return "自定义"
-
-
 def _is_history_run_dir(path: Path) -> bool:
     try:
         outputs = (Path.cwd() / "outputs").resolve()
@@ -757,15 +736,9 @@ def _completion_message(result: object) -> str:
     lines = [
         "检测完成，报告已生成并已尝试自动打开。",
         f"输出目录：{output_files.get('output_dir', '')}",
-        f"异常片段展示/总数：{stats.get('displayed_similar_match_count', stats.get('similar_match_count', 0))}/{stats.get('total_similar_match_count', stats.get('similar_match_count', 0))}",
-        f"已排除片段展示/总数：{stats.get('displayed_excluded_match_count', stats.get('excluded_match_count', 0))}/{stats.get('total_excluded_match_count', stats.get('excluded_match_count', 0))}",
+        f"异常片段：{stats.get('similar_match_count', 0)}",
+        f"已排除片段：{stats.get('excluded_match_count', 0)}",
     ]
-    if stats.get("match_truncated"):
-        lines.append("报告已截断，仅展示代表性命中。")
-        if output_files.get("all_matches_jsonl"):
-            lines.append(f"全量结果：{output_files.get('all_matches_jsonl')}")
-        else:
-            lines.append("如需全量明细，请开启“同时导出全量 all_matches.jsonl”。")
     return "\n".join(lines)
 
 
@@ -776,7 +749,7 @@ def _help_text() -> str:
             "",
             "一、准备文件",
             "1. 每家公司的投标文件可以单独成一个文件，也可以放到一个文件夹。",
-            "2. 支持 .docx、.doc、.wps、.md；Markdown 附带的本地图片会参与图片重复检测。",
+            "2. 支持 .docx、.doc、.wps、.md、.txt；Markdown 附带的本地图片会参与图片重复检测，txt 按纯文本解析。",
             "3. .doc/.wps 不会直接改原文件，程序会先转成临时 .docx 再解析。",
             "4. Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试转换；Linux/macOS 下使用 LibreOffice。",
             "5. 如果旧格式转换失败，请先在 WPS/Word/LibreOffice 中另存为 .docx 再导入。",
@@ -801,15 +774,13 @@ def _help_text() -> str:
             "3. 关键词检测不受短文本过滤影响；同一规则命中 2 个及以上公司/分组会判为异常。",
             "",
             "五、设置参数",
-            "0. 报告预设：快速适合先扫一遍，平衡适合默认复核，详细会保留更多片段但报告更大。",
-            "1. 中文/混合最短字符：低于该长度的短句不参与相似度比对，默认 20。",
+            "1. 中文/混合最短字符：低于该长度的短句不参与相似度比对，默认 10。",
             "2. 英文最短词数：英文片段低于该词数不参与相似度比对，默认 8。",
             "3. 文本相似阈值：越高越严格；默认 0.78，适合发现轻微改写。",
             "4. 排除文件阈值：默认 0.86，建议比文本相似阈值更高。",
             "5. 强分段符号：遇到这些符号会优先切分句子，默认包含句号、问号、叹号、分号。",
             "6. 长句辅助切分：长句超过限制时用这些符号辅助切开，默认包含逗号、顿号、冒号。",
-            "7. 高级参数可设置每组对保留的异常/已排除片段上限、单个片段最多关联多少目标、候选召回比例、长度过滤比例。",
-            "8. 如需完整机器可读结果，请勾选“同时导出全量 all_matches.jsonl”；默认报告只保留代表性片段以避免大文件报告过慢。",
+            "7. 每个参数右侧的 ? 可查看具体说明。",
             "",
             "六、开始检测和查看报告",
             "1. 点击“开始检测”，右侧日志会显示解析、索引、相似计算和报告生成进度。",
@@ -843,16 +814,6 @@ def _parse_float(value: str, label: str) -> float:
     except ValueError as exc:
         raise ValueError(f"{label} 必须是数字。") from exc
     if not 0 < number <= 1:
-        raise ValueError(f"{label} 必须在 0 到 1 之间。")
-    return number
-
-
-def _parse_ratio(value: str, label: str) -> float:
-    try:
-        number = float(value)
-    except ValueError as exc:
-        raise ValueError(f"{label} 必须是数字。") from exc
-    if not 0 <= number <= 1:
         raise ValueError(f"{label} 必须在 0 到 1 之间。")
     return number
 

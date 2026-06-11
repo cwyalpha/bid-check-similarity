@@ -8,7 +8,7 @@ from unittest.mock import patch
 from docx import Document
 from PIL import Image
 
-from checksim.engine import _hamming_hex, _length_ratio_ok, run_check
+from checksim.engine import _hamming_hex, run_check
 from checksim.parsers import parse_file
 from checksim.models import CheckOptions
 from checksim.text import split_blocks_to_units
@@ -233,7 +233,7 @@ class CheckSimEngineTest(unittest.TestCase):
             self.assertNotIn("**", text)
             self.assertNotIn("|", text)
 
-    def test_result_truncation_and_all_matches_jsonl(self) -> None:
+    def test_result_json_keeps_full_matches_without_truncation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             left = root / "left.md"
@@ -254,46 +254,46 @@ class CheckSimEngineTest(unittest.TestCase):
                     "options": {
                         "min_chars": 10,
                         "similarity_threshold": 0.78,
-                        "max_matches_per_pair": 2,
-                        "max_excluded_matches_per_pair": 0,
-                        "max_targets_per_unit": 20,
-                        "write_all_matches": True,
                     },
                 },
                 root / "outputs",
             )
 
             stats = result["stats"]
-            self.assertTrue(stats["match_truncated"])
-            self.assertEqual(stats["displayed_similar_match_count"], 2)
-            self.assertGreater(stats["total_similar_match_count"], stats["displayed_similar_match_count"])
-            self.assertEqual(len([match for match in result["matches"] if not match["excluded"]]), 2)
+            self.assertFalse(stats["match_truncated"])
+            self.assertEqual(stats["displayed_similar_match_count"], stats["total_similar_match_count"])
+            self.assertEqual(len([match for match in result["matches"] if not match["excluded"]]), stats["total_similar_match_count"])
 
             output_files = result["output_files"]
-            all_matches_path = Path(output_files["all_matches_jsonl"])
-            self.assertTrue(all_matches_path.exists())
-            jsonl_count = len(all_matches_path.read_text(encoding="utf-8").splitlines())
-            self.assertEqual(jsonl_count, stats["total_similar_match_count"] + stats["total_excluded_match_count"])
+            self.assertNotIn("all_matches_jsonl", output_files)
 
             result_json = Path(output_files["result_json"]).read_text(encoding="utf-8")
             self.assertNotIn('"_all_matches"', result_json)
             report_html = Path(output_files["report_html"]).read_text(encoding="utf-8")
-            self.assertIn("已截断", report_html)
-            self.assertIn("all_matches.jsonl", report_html)
+            self.assertNotIn("已截断", report_html)
+            self.assertNotIn("all_matches.jsonl", report_html)
             self.assertIn("pairSummaryTable", report_html)
             self.assertIn("minSimFilter", report_html)
             self.assertIn("pairIncludeExcluded", report_html)
 
             compare_html = Path(output_files["compare_pages"][0]["path"]).read_text(encoding="utf-8")
-            self.assertIn("仅标注报告保留的代表性命中", compare_html)
+            self.assertNotIn("代表性", compare_html)
 
     def test_similarity_backend_embedding_is_reserved(self) -> None:
         with self.assertRaisesRegex(ValueError, "embedding"):
             CheckOptions.from_dict({"similarity_backend": "embedding"})
 
-    def test_length_ratio_prefilter(self) -> None:
-        self.assertFalse(_length_ratio_ok("abcdef", "abcdefghijklmnopqrstuvwxyz", 0.55))
-        self.assertTrue(_length_ratio_ok("abcdef", "abcdefghijklmnopqrstuvwxyz", 0.0))
+    def test_txt_is_parsed_as_plain_text_without_markdown_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "plain.txt"
+            path.write_text("# 标题\n**这不是 Markdown 加粗标记**\n普通纯文本内容。", encoding="utf-8")
+
+            parsed = parse_file(path, "测试组", 0, CheckOptions(min_chars=1))
+            text = "\n".join(parsed.blocks)
+
+            self.assertIn("# 标题", text)
+            self.assertIn("**这不是 Markdown 加粗标记**", text)
+            self.assertTrue(parsed.units)
 
 
 def _make_docx(path: Path, paragraphs: list[str], image_path: Path | None) -> None:

@@ -15,28 +15,18 @@ def write_report_bundle(result: dict[str, Any], output_dir: str | Path) -> dict[
     output.mkdir(parents=True, exist_ok=True)
     result_path = output / "result.json"
     report_path = output / "report.html"
-    all_matches = result.pop("_all_matches", [])
-    all_matches_path = output / "all_matches.jsonl"
     compare_pages = _write_compare_pages(result, output)
     paths = {
         "result_json": str(result_path),
         "report_html": str(report_path),
         "output_dir": str(output),
         "compare_pages": compare_pages,
-        "all_matches_jsonl": str(all_matches_path) if all_matches else "",
         "match_truncated": bool(result.get("stats", {}).get("match_truncated")),
     }
     result["output_files"] = paths
-    if all_matches:
-        all_matches_path.write_text(
-            "".join(json.dumps(match, ensure_ascii=False) + "\n" for match in all_matches),
-            encoding="utf-8",
-        )
     result.setdefault("performance", {}).setdefault("stage_seconds", {})["report"] = round(time.perf_counter() - started, 3)
     report_path.write_text(render_report(result), encoding="utf-8")
     paths["report_html_bytes"] = report_path.stat().st_size
-    if all_matches:
-        paths["all_matches_jsonl_bytes"] = all_matches_path.stat().st_size
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     paths["result_json_bytes"] = result_path.stat().st_size
     result["output_files"] = paths
@@ -75,8 +65,7 @@ def render_report(result: dict[str, Any]) -> str:
 
 def _header(result: dict[str, Any]) -> str:
     stats = result.get("stats", {})
-    displayed = stats.get("displayed_similar_match_count", stats.get("similar_match_count", 0))
-    total = stats.get("total_similar_match_count", displayed)
+    total = stats.get("similar_match_count", 0)
     return f"""
 <header class="hero">
   <div>
@@ -84,8 +73,8 @@ def _header(result: dict[str, Any]) -> str:
     <p>生成时间：{escape(result.get("generated_at", ""))}</p>
   </div>
   <div class="hero-score">
-    <strong>{displayed}/{total}</strong>
-    <span>展示/总异常片段</span>
+    <strong>{total}</strong>
+    <span>异常片段</span>
   </div>
 </header>
 """
@@ -98,8 +87,8 @@ def _stats(result: dict[str, Any]) -> str:
         ("投标文件", stats.get("document_count", 0)),
         ("可比片段", stats.get("comparable_unit_count", 0)),
         ("短文本过滤", stats.get("short_filtered_unit_count", 0)),
-        ("异常展示/总数", f"{stats.get('displayed_similar_match_count', stats.get('similar_match_count', 0))}/{stats.get('total_similar_match_count', stats.get('similar_match_count', 0))}"),
-        ("排除展示/总数", f"{stats.get('displayed_excluded_match_count', stats.get('excluded_match_count', 0))}/{stats.get('total_excluded_match_count', stats.get('excluded_match_count', 0))}"),
+        ("异常片段", stats.get("similar_match_count", 0)),
+        ("已排除片段", stats.get("excluded_match_count", 0)),
         ("关键词异常", stats.get("keyword_alert_count", 0)),
         ("图片重复", stats.get("image_duplicate_count", 0)),
     ]
@@ -110,19 +99,6 @@ def _stats(result: dict[str, Any]) -> str:
 def _run_summary(result: dict[str, Any]) -> str:
     stats = result.get("stats", {})
     performance = result.get("performance", {})
-    output_files = result.get("output_files", {})
-    warnings = []
-    if stats.get("match_truncated"):
-        warnings.append(
-            "报告仅展示代表性片段；"
-            f"已截断异常 {stats.get('truncated_similar_match_count', 0)} 条、"
-            f"已排除 {stats.get('truncated_excluded_match_count', 0)} 条。"
-        )
-    all_matches = output_files.get("all_matches_jsonl")
-    if all_matches:
-        warnings.append(f"全量相似结果已写入: {escape(str(all_matches))}")
-    elif stats.get("match_truncated"):
-        warnings.append("如需全量明细，请在配置中启用 write_all_matches。")
     stage = performance.get("stage_seconds", {})
     rows = [
         ("总耗时", f"{performance.get('engine_seconds', 0)} 秒"),
@@ -131,11 +107,9 @@ def _run_summary(result: dict[str, Any]) -> str:
         ("报告生成", f"{stage.get('report', 0)} 秒"),
     ]
     body = "".join(f"<tr><th>{escape(str(name))}</th><td>{escape(str(value))}</td></tr>" for name, value in rows)
-    warn_html = "".join(f"<p class='warn'>{item}</p>" for item in warnings)
     return f"""
 <section class="panel">
   <h2>运行与输出摘要</h2>
-  {warn_html}
   <table class="meta-table"><tbody>{body}</tbody></table>
 </section>
 """
@@ -151,8 +125,6 @@ def _options(result: dict[str, Any]) -> str:
         ("强分段符号", options.get("sentence_delimiters")),
         ("长句辅助切分符号", options.get("soft_delimiters")),
         ("图片近似阈值", f"aHash 汉明距离 <= {options.get('image_ahash_distance')}"),
-        ("结果上限", f"每组对异常 {options.get('max_matches_per_pair')} / 已排除 {options.get('max_excluded_matches_per_pair')}"),
-        ("候选召回", f"共享 ngram 比例 {options.get('candidate_shared_ratio')}，长度比例 >= {options.get('min_length_ratio')}"),
         ("相似度后端", options.get("similarity_backend")),
     ]
     body = "".join(f"<tr><th>{escape(str(name))}</th><td>{escape(str(value))}</td></tr>" for name, value in rows)
@@ -181,11 +153,11 @@ def _pair_summary(result: dict[str, Any]) -> str:
             f"<td>{index}</td>"
             f"<td>{escape(item['group_a'])}</td>"
             f"<td>{escape(item['group_b'])}</td>"
-            f"<td class='num danger'>{item.get('displayed_match_count', item['match_count'])}/{item.get('total_match_count', item['match_count'])}</td>"
-            f"<td class='num muted'>{item.get('displayed_excluded_count', item['excluded_count'])}/{item.get('total_excluded_count', item['excluded_count'])}</td>"
+            f"<td class='num danger'>{item['match_count']}</td>"
+            f"<td class='num muted'>{item['excluded_count']}</td>"
             f"<td class='num'>{_percent(item['max_similarity'])}</td>"
             f"<td class='num'>{_percent(item['avg_similarity'])}</td>"
-            f"<td>{'已截断 | ' if item.get('truncated') else ''}<a href='#{pair_id}'>查看明细</a>{compare_link}</td>"
+            f"<td><a href='#{pair_id}'>查看明细</a>{compare_link}</td>"
             "</tr>"
         )
     body = "".join(rows) or "<tr><td colspan='8' class='empty'>未发现超过阈值的跨组相似片段。</td></tr>"
@@ -202,7 +174,7 @@ def _pair_summary(result: dict[str, Any]) -> str:
     </div>
   </div>
   <table id="pairSummaryTable">
-    <thead><tr><th>序号</th><th>组1</th><th>组2</th><th>异常展示/总数</th><th>已排除展示/总数</th><th>最高相似度</th><th>平均相似度</th><th>操作</th></tr></thead>
+    <thead><tr><th>序号</th><th>组1</th><th>组2</th><th>异常片段</th><th>已排除片段</th><th>最高相似度</th><th>平均相似度</th><th>操作</th></tr></thead>
     <tbody>{body}</tbody>
   </table>
 </section>
@@ -285,7 +257,6 @@ def _match_details(result: dict[str, Any]) -> str:
         sections.append(
             f"<section class='panel detail' id='{_pair_id(*pair)}'>"
             f"<h2>{escape(pair[0])} VS {escape(pair[1])}</h2>"
-            + _pair_truncation_note(summary)
             + _match_cards(pair_matches)
             + "</section>"
         )
@@ -322,16 +293,6 @@ def _match_cards(matches: list[dict[str, Any]]) -> str:
             "</article>"
         )
     return "\n".join(cards)
-
-
-def _pair_truncation_note(summary: dict[str, Any]) -> str:
-    if not summary.get("truncated"):
-        return ""
-    return (
-        "<p class='warn'>该组对仅展示代表性片段；"
-        f"异常截断 {summary.get('truncated_match_count', 0)} 条，"
-        f"已排除截断 {summary.get('truncated_excluded_count', 0)} 条。</p>"
-    )
 
 
 def _write_compare_pages(result: dict[str, Any], output: Path) -> list[dict[str, Any]]:
@@ -382,7 +343,7 @@ def render_compare_page(result: dict[str, Any], group_a: str, group_b: str, matc
             "<header class='compare-top'>",
             "<div>",
             f"<h1>{escape(title)}</h1>",
-            f"<p>展示异常相似 {sum(1 for match in matches if not match.get('excluded'))} 处，展示已排除 {sum(1 for match in matches if match.get('excluded'))} 处；仅标注报告保留的代表性命中</p>",
+            f"<p>异常相似 {sum(1 for match in matches if not match.get('excluded'))} 处，已排除 {sum(1 for match in matches if match.get('excluded'))} 处</p>",
             "</div>",
             "<a href='report.html'>返回总报告</a>",
             "</header>",

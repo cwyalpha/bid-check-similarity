@@ -39,13 +39,6 @@
     "exclude_threshold": 0.86,
     "sentence_delimiters": "。！？!?；;",
     "soft_delimiters": "，,、：:",
-    "max_matches_per_pair": 600,
-    "max_excluded_matches_per_pair": 200,
-    "max_targets_per_unit": 20,
-    "write_all_matches": false,
-    "candidate_shared_ratio": 0.12,
-    "exclude_candidates_per_unit": 80,
-    "min_length_ratio": 0.55,
     "similarity_backend": "local_ngrams",
     "image_ahash_distance": 6
   }

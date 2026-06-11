@@ -18,13 +18,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--groups", type=int, default=4, help="投标分组数量")
     parser.add_argument("--chars-per-file", type=int, default=100000, help="每组 Markdown 样本文本目标字符数")
     parser.add_argument("--keep", action="store_true", help="保留临时样本和输出目录")
-    parser.add_argument("--write-all-matches", action="store_true", help="同时导出全量 all_matches.jsonl")
     args = parser.parse_args(argv)
 
     repo_root = Path(__file__).resolve().parents[1]
     work_dir = Path(tempfile.mkdtemp(prefix="checksim_perf_"))
     try:
-        config_path = _generate_case(work_dir, args.groups, args.chars_per_file, args.write_all_matches)
+        config_path = _generate_case(work_dir, args.groups, args.chars_per_file)
         output_dir = work_dir / "outputs" / f"run_{args.mode}"
         command = _command_for_mode(repo_root, args.mode, config_path, output_dir)
         started = time.perf_counter()
@@ -38,7 +37,6 @@ def main(argv: list[str] | None = None) -> int:
         result_path = output_dir / "result.json"
         result = json.loads(result_path.read_text(encoding="utf-8"))
         report_path = output_dir / "report.html"
-        all_matches_path = output_dir / "all_matches.jsonl"
         metrics = {
             "mode": args.mode,
             "elapsed_seconds": round(elapsed, 3),
@@ -47,7 +45,6 @@ def main(argv: list[str] | None = None) -> int:
             "stats": result.get("stats", {}),
             "report_html_bytes": _file_size(report_path),
             "result_json_bytes": _file_size(result_path),
-            "all_matches_jsonl_bytes": _file_size(all_matches_path),
             "output_dir": str(output_dir),
             "kept": bool(args.keep),
         }
@@ -82,7 +79,7 @@ def _command_for_mode(repo_root: Path, mode: str, config_path: Path, output_dir:
     ]
 
 
-def _generate_case(work_dir: Path, group_count: int, chars_per_file: int, write_all_matches: bool) -> Path:
+def _generate_case(work_dir: Path, group_count: int, chars_per_file: int) -> Path:
     samples_dir = work_dir / "samples"
     samples_dir.mkdir(parents=True)
     exclude_path = samples_dir / "招标文件.md"
@@ -107,13 +104,6 @@ def _generate_case(work_dir: Path, group_count: int, chars_per_file: int, write_
             "exclude_threshold": 0.86,
             "sentence_delimiters": "。！？!?；;",
             "soft_delimiters": "，,、：:",
-            "max_matches_per_pair": 600,
-            "max_excluded_matches_per_pair": 200,
-            "max_targets_per_unit": 20,
-            "write_all_matches": write_all_matches,
-            "candidate_shared_ratio": 0.12,
-            "exclude_candidates_per_unit": 80,
-            "min_length_ratio": 0.55,
             "similarity_backend": "local_ngrams",
             "image_ahash_distance": 6,
         },
