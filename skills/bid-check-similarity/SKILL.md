@@ -1,6 +1,6 @@
 ---
 name: bid-check-similarity
-description: 离线标书和文件查重 Skill，支持按公司/投标单位分组比对 .docx/.doc/.wps/.md/.txt 文件。适用于需要检测投标文件相似文本、排除招标文件或模板内容、发现跨组关键词/正则异常，并在 Windows 或 Linux 上生成本地 HTML/JSON 报告的场景。
+description: 离线标书和文件查重 Skill，支持按公司/投标单位分组比对 .docx/.doc/.wps/.md/.txt 文件。适用于需要检测投标文件相似文本、排除招标文件或模板内容、发现跨组关键词/正则异常，并在 Windows、macOS 或 Linux 上生成本地 HTML/JSON 报告的场景。
 ---
 
 # bid-check-similarity
@@ -37,10 +37,10 @@ python path/to/skill/scripts/run_check.py --config case.json --output outputs/ru
 ## 平台说明
 
 - 本 Skill 自带 `scripts/vendor/checksim` 核心代码副本；运行 `scripts/run_check.py` 时只使用 Skill 目录内文件，不依赖仓库根目录。
-- `.docx`、`.md` 和 `.txt` 在 Windows 与 Linux 上直接解析；`.txt` 按纯文本处理，不做 Markdown 去格式。
+- `.docx`、`.md` 和 `.txt` 在 Windows、macOS 与 Linux 上直接解析；`.txt` 按纯文本处理，不做 Markdown 去格式。
 - `.doc/.wps` 会先转换为临时 `.docx` 再解析，原始文件不会被修改。
 - Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试转换。
-- Linux 下旧格式转换依赖 LibreOffice `soffice`。
+- macOS/Linux 下旧格式转换依赖 LibreOffice `soffice`。
 - 如果旧格式转换不可用，明确报告错误，并提示用户安装 LibreOffice 或先手动另存为 `.docx`。
 - 新 Python 环境需要先安装 `scripts/requirements.txt` 中的依赖。
 

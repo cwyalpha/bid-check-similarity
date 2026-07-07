@@ -14,11 +14,14 @@
 
 ## 桌面版
 
-从 Release 页面下载单文件 Windows 程序：
+从 Release 页面下载对应平台的桌面版：
 
 ```text
-标书文件查重工具.exe
+BidCheckSimilarity-v0.2.4-Windows-x64.exe
+BidCheckSimilarity-v0.2.4-macOS-arm64.zip
 ```
+
+macOS 下载 zip 后解压，打开 `标书文件查重工具.app`。如果系统提示来自互联网下载，可在 Finder 右键选择“打开”。
 
 运行后按界面步骤操作：
 
@@ -31,6 +34,16 @@
 3. 可选填写关键词或正则规则。
 4. 调整短文本过滤、相似度阈值、排除文件阈值、分段符号等参数；每个参数右侧 `?` 可查看说明。
 5. 点击“开始检测”，完成后会自动打开 `report.html`。
+
+仓库自带可直接试用的示例：`sample_cases/demo_4_groups`。它包含晨星、凌云、北辰、青禾 4 家投标文件和 1 个招标文件；关键词可填写 `晨星`、`凌云`、`北辰`、`青禾`。
+
+## 软件截图
+
+![桌面版主界面](docs/images/gui-main.png)
+
+![报告总览](docs/images/report-overview.png)
+
+![比对详情页](docs/images/compare-detail.png)
 
 ## 命令行
 
@@ -71,7 +84,7 @@ AGENT_SKILLS_DIR=/path/to/agent/skills npx github:cwyalpha/bid-check-similarity
 python -m pip install -r /path/to/agent/skills/bid-check-similarity/scripts/requirements.txt
 ```
 
-Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Linux。Windows 处理 `.doc/.wps` 时可使用 WPS/Office/LibreOffice；Linux 处理旧格式文件需要 LibreOffice `soffice`。
+Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows、macOS 与 Linux。Windows 处理 `.doc/.wps` 时可使用 WPS/Office/LibreOffice；macOS/Linux 处理旧格式文件需要 LibreOffice `soffice`。
 安装后的 Skill 是自包含的：`scripts/vendor/checksim` 内置核心代码副本，运行时不依赖仓库根目录或外部脚本。
 
 ## 配置示例
@@ -89,7 +102,7 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows 与 Lin
     }
   ],
   "exclude_files": ["D:/cases/招标文件.docx"],
-  "keywords": ["某某科技有限公司", "re:1[3-9]\\d{9}"],
+  "keywords": ["晨星", "凌云", "北辰", "青禾"],
   "options": {
     "min_chars": 10,
     "min_words": 8,
@@ -153,6 +166,18 @@ powershell -ExecutionPolicy Bypass -File .\build_exe_py38.ps1
 dist\标书文件查重工具.exe
 ```
 
+构建 macOS 桌面版：
+
+```bash
+./build_macos.sh
+```
+
+输出文件：
+
+```text
+release/BidCheckSimilarity-v0.2.4-macOS-arm64.zip
+```
+
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=cwyalpha/bid-check-similarity&type=Date)](https://star-history.com/#cwyalpha/bid-check-similarity&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=cwyalpha/bid-check-similarity&type=Date&legend=top-left)](https://www.star-history.com/?repos=cwyalpha%2Fbid-check-similarity&type=date&legend=top-left)

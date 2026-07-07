@@ -4,8 +4,16 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import tkinter as tk
+from unittest.mock import patch
 
-from checksim.ui import CheckSimApp, _completion_message, _groups_from_company_folders, _groups_from_single_files
+from checksim.ui import (
+    CheckSimApp,
+    _completion_message,
+    _groups_from_company_folders,
+    _groups_from_single_files,
+    _open_path,
+    _output_root,
+)
 
 
 class CheckSimUiTest(unittest.TestCase):
@@ -103,6 +111,20 @@ class CheckSimUiTest(unittest.TestCase):
         self.assertIn("异常片段：8", message)
         self.assertIn("已排除片段：3", message)
         self.assertNotIn("all_matches.jsonl", message)
+
+    def test_open_path_uses_macos_open(self) -> None:
+        with patch("checksim.ui.sys.platform", "darwin"), patch("checksim.ui.subprocess.Popen") as mocked:
+            _open_path("/tmp/report.html")
+
+        mocked.assert_called_once_with(["open", "/tmp/report.html"])
+
+    def test_frozen_macos_output_root_uses_user_documents(self) -> None:
+        with patch("checksim.ui._is_frozen_macos", return_value=True), patch.object(
+            Path,
+            "home",
+            return_value=Path("/Users/demo"),
+        ):
+            self.assertEqual(_output_root(), Path("/Users/demo/Documents/标书文件查重工具输出"))
 
 
 if __name__ == "__main__":

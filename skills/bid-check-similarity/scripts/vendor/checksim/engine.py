@@ -30,8 +30,29 @@ _TEXT_RECALL_LENGTH_FLOOR = 0.55
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
-    with Path(path).expanduser().open("r", encoding="utf-8") as fh:
-        return json.load(fh)
+    config_path = Path(path).expanduser().resolve()
+    with config_path.open("r", encoding="utf-8") as fh:
+        config = json.load(fh)
+    return _resolve_config_paths(config, config_path.parent)
+
+
+def _resolve_config_paths(config: dict[str, Any], base_dir: Path) -> dict[str, Any]:
+    resolved = dict(config)
+    groups: list[dict[str, Any]] = []
+    for raw_group in config.get("groups") or []:
+        group = dict(raw_group)
+        group["files"] = [_resolve_config_path(file, base_dir) for file in group.get("files") or []]
+        groups.append(group)
+    resolved["groups"] = groups
+    resolved["exclude_files"] = [_resolve_config_path(file, base_dir) for file in config.get("exclude_files") or []]
+    return resolved
+
+
+def _resolve_config_path(value: object, base_dir: Path) -> str:
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    return str((base_dir / path).resolve())
 
 
 def normalize_config(config: dict[str, Any]) -> tuple[list[InputGroup], list[str], list[str], CheckOptions]:

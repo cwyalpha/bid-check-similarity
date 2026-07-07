@@ -9,7 +9,7 @@ from unittest.mock import patch
 from docx import Document
 from PIL import Image
 
-from checksim.engine import _hamming_hex, run_check
+from checksim.engine import _hamming_hex, load_config, run_check
 from checksim.parsers import parse_file
 from checksim.models import CheckOptions
 from checksim.text import split_blocks_to_units
@@ -122,6 +122,35 @@ class CheckSimEngineTest(unittest.TestCase):
 
             parsed = parse_file(path, "测试组", 0, CheckOptions())
             self.assertTrue(any("三年驻场运维服务" in block for block in parsed.blocks))
+
+    def test_load_config_resolves_paths_relative_to_config_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case_dir = root / "case"
+            case_dir.mkdir()
+            (case_dir / "A公司").mkdir()
+            (case_dir / "B公司").mkdir()
+            (case_dir / "招标文件.docx").write_bytes(b"placeholder")
+            config_path = case_dir / "case.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "groups": [
+                            {"name": "A公司", "files": ["A公司/投标文件.docx"]},
+                            {"name": "B公司", "files": ["B公司/投标文件.docx"]},
+                        ],
+                        "exclude_files": ["招标文件.docx"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        self.assertEqual(config["groups"][0]["files"], [str((case_dir / "A公司/投标文件.docx").resolve())])
+        self.assertEqual(config["groups"][1]["files"], [str((case_dir / "B公司/投标文件.docx").resolve())])
+        self.assertEqual(config["exclude_files"], [str((case_dir / "招标文件.docx").resolve())])
 
     def test_legacy_doc_is_converted_then_parsed_with_original_name(self) -> None:
         temp_dirs: list[Path] = []

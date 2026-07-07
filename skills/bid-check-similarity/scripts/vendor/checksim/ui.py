@@ -4,6 +4,8 @@ import json
 import os
 import queue
 import shutil
+import subprocess
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +13,7 @@ from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, filedialog, messagebox, si
 import tkinter as tk
 from tkinter import ttk
 
-from .engine import run_check
+from .engine import load_config, run_check
 from .models import CheckOptions, SUPPORTED_EXTENSIONS, normalize_path
 
 
@@ -432,7 +434,7 @@ class CheckSimApp(ttk.Frame):
         except ValueError as exc:
             messagebox.showerror("参数错误", str(exc))
             return
-        output_dir = Path.cwd() / "outputs" / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        output_dir = _output_root() / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self._log("开始检测...")
         self._set_running(True, "检测中")
         thread = threading.Thread(target=self._worker, args=(config, output_dir), daemon=True)
@@ -534,7 +536,7 @@ class CheckSimApp(ttk.Frame):
         if not path:
             return
         try:
-            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+            raw = load_config(path)
             options = CheckOptions.from_dict(raw.get("options") or {})
         except Exception as exc:
             messagebox.showerror("加载失败", f"无法读取配置：{exc}")
@@ -606,7 +608,7 @@ class CheckSimApp(ttk.Frame):
         if not hasattr(self, "history_list"):
             return
         self.history_list.delete(0, END)
-        reports = sorted((Path.cwd() / "outputs").glob("run_*/report.html"), reverse=True)
+        reports = sorted(_output_root().glob("run_*/report.html"), reverse=True)
         for report in reports[:30]:
             self.history_list.insert(END, str(report))
 
@@ -719,11 +721,21 @@ def _group_file_signature(group: dict[str, object]) -> tuple[str, ...]:
 
 def _is_history_run_dir(path: Path) -> bool:
     try:
-        outputs = (Path.cwd() / "outputs").resolve()
+        outputs = _output_root().resolve()
         resolved = path.resolve()
     except OSError:
         return False
     return resolved.name.startswith("run_") and outputs in resolved.parents
+
+
+def _is_frozen_macos() -> bool:
+    return sys.platform == "darwin" and bool(getattr(sys, "frozen", False))
+
+
+def _output_root() -> Path:
+    if _is_frozen_macos():
+        return Path.home() / "Documents" / "标书文件查重工具输出"
+    return Path.cwd() / "outputs"
 
 
 def _completion_message(result: object) -> str:
@@ -821,9 +833,9 @@ def _parse_float(value: str, label: str) -> float:
 def _open_path(path: str) -> None:
     if os.name == "nt":
         os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
     else:
-        import subprocess
-
         subprocess.Popen(["xdg-open", path])
 
 
