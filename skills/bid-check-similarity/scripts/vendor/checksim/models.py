@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-SUPPORTED_EXTENSIONS = {".docx", ".doc", ".wps", ".md", ".txt"}
+SUPPORTED_EXTENSIONS = {".docx", ".doc", ".wps", ".pdf", ".md", ".txt"}
 
 
 @dataclass
@@ -24,6 +24,12 @@ class CheckOptions:
     image_ahash_distance: int = 6
     legacy_conversion_timeout: int = 120
     soffice_path: str = ""
+    pdf_ocr_mode: str = "auto"
+    pdf_ocr_lang: str = "ch"
+    pdf_min_text_chars: int = 20
+    pdf_ocr_engine: str = "onnxruntime"
+    pdf_ocr_det_model: str = "PP-OCRv6_medium_det"
+    pdf_ocr_rec_model: str = "PP-OCRv6_medium_rec"
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "CheckOptions":
@@ -42,6 +48,12 @@ class CheckOptions:
             "image_ahash_distance",
             "legacy_conversion_timeout",
             "soffice_path",
+            "pdf_ocr_mode",
+            "pdf_ocr_lang",
+            "pdf_min_text_chars",
+            "pdf_ocr_engine",
+            "pdf_ocr_det_model",
+            "pdf_ocr_rec_model",
         ):
             if key in raw and raw[key] is not None:
                 setattr(options, key, raw[key])
@@ -57,6 +69,7 @@ class CheckOptions:
         self.max_ngram_postings = max(0, int(self.max_ngram_postings))
         self.image_ahash_distance = max(0, int(self.image_ahash_distance))
         self.legacy_conversion_timeout = max(10, int(self.legacy_conversion_timeout))
+        self.pdf_min_text_chars = max(0, int(self.pdf_min_text_chars))
         self.similarity_threshold = _clamp_float(self.similarity_threshold, 0.1, 1.0)
         self.exclude_threshold = _clamp_float(self.exclude_threshold, 0.1, 1.0)
         self.sentence_delimiters = str(self.sentence_delimiters or "。！？!?；;")
@@ -67,6 +80,19 @@ class CheckOptions:
         if self.similarity_backend != "local_ngrams":
             raise ValueError(f"未知相似度后端: {self.similarity_backend}")
         self.soffice_path = str(self.soffice_path or "").strip()
+        self.pdf_ocr_mode = str(self.pdf_ocr_mode or "auto").strip().lower()
+        if self.pdf_ocr_mode in {"true", "yes", "on", "1"}:
+            self.pdf_ocr_mode = "always"
+        elif self.pdf_ocr_mode in {"false", "no", "off", "0", "none"}:
+            self.pdf_ocr_mode = "off"
+        if self.pdf_ocr_mode not in {"auto", "always", "off"}:
+            raise ValueError("pdf_ocr_mode 必须是 auto、always 或 off。")
+        self.pdf_ocr_lang = str(self.pdf_ocr_lang or "ch").strip() or "ch"
+        self.pdf_ocr_engine = str(self.pdf_ocr_engine or "onnxruntime").strip().lower()
+        if self.pdf_ocr_engine in {"none", "default"}:
+            self.pdf_ocr_engine = ""
+        self.pdf_ocr_det_model = str(self.pdf_ocr_det_model or "").strip()
+        self.pdf_ocr_rec_model = str(self.pdf_ocr_rec_model or "").strip()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +108,12 @@ class CheckOptions:
             "image_ahash_distance": self.image_ahash_distance,
             "legacy_conversion_timeout": self.legacy_conversion_timeout,
             "soffice_path": self.soffice_path,
+            "pdf_ocr_mode": self.pdf_ocr_mode,
+            "pdf_ocr_lang": self.pdf_ocr_lang,
+            "pdf_min_text_chars": self.pdf_min_text_chars,
+            "pdf_ocr_engine": self.pdf_ocr_engine,
+            "pdf_ocr_det_model": self.pdf_ocr_det_model,
+            "pdf_ocr_rec_model": self.pdf_ocr_rec_model,
         }
 
 

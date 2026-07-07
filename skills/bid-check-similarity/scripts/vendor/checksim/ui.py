@@ -18,8 +18,9 @@ from .models import CheckOptions, SUPPORTED_EXTENSIONS, normalize_path
 
 
 SUPPORTED_FILETYPES = [
-    ("支持的文件", "*.docx *.doc *.wps *.md *.txt"),
+    ("支持的文件", "*.docx *.doc *.wps *.pdf *.md *.txt"),
     ("Word/WPS", "*.docx *.doc *.wps"),
+    ("PDF", "*.pdf"),
     ("Markdown", "*.md"),
     ("Text", "*.txt"),
 ]
@@ -292,7 +293,7 @@ class CheckSimApp(ttk.Frame):
         folder_path = Path(folder)
         files = _find_supported_files(folder_path)
         if not files:
-            messagebox.showwarning("未找到文件", "该目录下没有 .docx、.doc、.wps、.md 或 .txt 文件。")
+            messagebox.showwarning("未找到文件", "该目录下没有 .docx、.doc、.wps、.pdf、.md 或 .txt 文件。")
             return
         name = simpledialog.askstring("分组名称", "请输入公司/分组名称", initialvalue=folder_path.name, parent=self.master)
         if not name:
@@ -326,7 +327,7 @@ class CheckSimApp(ttk.Frame):
             "批量文件夹成组",
             "请选择“包含多个公司文件夹的上级目录”。\n\n"
             "程序会把该目录下的每个直接子文件夹作为一个公司/分组，"
-            "并递归导入子文件夹中的 .docx、.doc、.wps、.md、.txt 文件。\n\n"
+            "并递归导入子文件夹中的 .docx、.doc、.wps、.pdf、.md、.txt 文件。\n\n"
             "如果只想添加某一家公司的单个目录，请使用“按目录添加组”。",
             parent=self.master,
         )
@@ -337,7 +338,7 @@ class CheckSimApp(ttk.Frame):
             return
         groups, empty_folders = _groups_from_company_folders(Path(folder))
         if not groups:
-            messagebox.showwarning("未找到文件", "该目录的直接子文件夹中没有 .docx、.doc、.wps、.md 或 .txt 文件。")
+            messagebox.showwarning("未找到文件", "该目录的直接子文件夹中没有 .docx、.doc、.wps、.pdf、.md 或 .txt 文件。")
             return
         added, skipped = self._append_groups(groups)
         if added:
@@ -761,10 +762,11 @@ def _help_text() -> str:
             "",
             "一、准备文件",
             "1. 每家公司的投标文件可以单独成一个文件，也可以放到一个文件夹。",
-            "2. 支持 .docx、.doc、.wps、.md、.txt；Markdown 附带的本地图片会参与图片重复检测，txt 按纯文本解析。",
+            "2. 支持 .docx、.doc、.wps、.pdf、.md、.txt；PDF 会优先读取可复制文本，Markdown 附带的本地图片会参与图片重复检测，txt 按纯文本解析。",
             "3. .doc/.wps 不会直接改原文件，程序会先转成临时 .docx 再解析。",
             "4. Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试转换；Linux/macOS 下使用 LibreOffice。",
-            "5. 如果旧格式转换失败，请先在 WPS/Word/LibreOffice 中另存为 .docx 再导入。",
+            "5. 桌面打包版内置 PaddleOCR/PP-OCRv6，可处理扫描版 PDF；源码或 Skill 运行时需安装 OCR 依赖。",
+            "6. 如果旧格式转换失败，请先在 WPS/Word/LibreOffice 中另存为 .docx 再导入。",
             "",
             "二、添加投标文件分组",
             "1. 点击“添加文件组”，选择某一家公司的一批文件，然后输入公司/分组名称。",

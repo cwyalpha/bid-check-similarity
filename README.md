@@ -1,6 +1,6 @@
 # 标书/文件查重工具
 
-本项目是一个本地离线运行的标书/文件查重工具，支持桌面 GUI、命令行 CLI 和 Agent Skill。它可以按公司/投标单位分组导入 `.docx`、`.doc`、`.wps`、`.md`、`.txt` 文件，检测跨组相似文本、共享关键词/正则、重复图片，并生成可在内网离线打开的 HTML 报告。
+本项目是一个本地离线运行的标书/文件查重工具，支持桌面 GUI、命令行 CLI 和 Agent Skill。它可以按公司/投标单位分组导入 `.docx`、`.doc`、`.wps`、`.pdf`、`.md`、`.txt` 文件，检测跨组相似文本、共享关键词/正则、重复图片，并生成可在内网离线打开的 HTML 报告。
 
 ## 软件截图
 
@@ -17,6 +17,7 @@
 - 支持重要关键词和 `re:` 正则规则；同一规则命中 2 个及以上公司组即提示异常。
 - 支持短文本过滤、文本相似阈值、排除文件阈值、分段符号等参数设置。
 - 支持 `.doc/.wps` 自动转换：Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试，Linux/macOS 下使用 LibreOffice。
+- 支持 PDF 文本读取：可复制文本的 PDF 直接解析；桌面打包版默认内置 PaddleOCR/PP-OCRv6 medium OCR，用于处理扫描版 PDF。
 - 生成 `report.html`、`ai_summary.json`、`result.json` 和按组对生成的 `compare_*.html` 左右对照页，完整结果默认全量写入。
 - HTML 报告的 CSS/JS 均内嵌，不依赖 CDN，适合内网离线使用。
 
@@ -25,8 +26,8 @@
 从 Release 页面下载对应平台的桌面版：
 
 ```text
-BidCheckSimilarity-v0.2.4-Windows-x64.exe
-BidCheckSimilarity-v0.2.4-macOS-arm64.zip
+BidCheckSimilarity-v版本号-Windows-x64.exe
+BidCheckSimilarity-v版本号-macOS-arm64.zip
 ```
 
 macOS 下载 zip 后解压，打开 `标书文件查重工具.app`。如果系统提示来自互联网下载，可在 Finder 右键选择“打开”。
@@ -84,8 +85,22 @@ AGENT_SKILLS_DIR=/path/to/agent/skills npx github:cwyalpha/bid-check-similarity
 python -m pip install -r /path/to/agent/skills/bid-check-similarity/scripts/requirements.txt
 ```
 
-Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows、macOS 与 Linux。Windows 处理 `.doc/.wps` 时可使用 WPS/Office/LibreOffice；macOS/Linux 处理旧格式文件需要 LibreOffice `soffice`。
+Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows、macOS 与 Linux。Windows 处理 `.doc/.wps` 时可使用 WPS/Office/LibreOffice；macOS/Linux 处理旧格式文件需要 LibreOffice `soffice`。PDF 文本层默认直接读取；桌面打包版默认内置 PaddleOCR/PP-OCRv6 medium OCR 模型处理扫描件，不是 1GB 级别的 PaddleOCR-VL。
 安装后的 Skill 是自包含的：`scripts/vendor/checksim` 内置核心代码副本，运行时不依赖仓库根目录或外部脚本。
+
+扫描版 PDF 如需 OCR，可在仓库环境中额外安装：
+
+```bash
+python -m pip install -e ".[ocr]"
+```
+
+Skill 自包含安装场景如需 OCR，可以额外安装：
+
+```bash
+python -m pip install -r /path/to/agent/skills/bid-check-similarity/scripts/requirements-ocr.txt
+```
+
+OCR 仅在 PDF 文本层不足时自动尝试，也可以通过配置设置 `pdf_ocr_mode` 为 `always` 强制使用。
 
 ## 配置示例
 
@@ -98,7 +113,7 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows、macOS
     },
     {
       "name": "B公司",
-      "files": ["D:/cases/B公司/投标文件.md", "D:/cases/B公司/补充材料.wps", "D:/cases/B公司/说明.txt"]
+      "files": ["D:/cases/B公司/投标文件.md", "D:/cases/B公司/补充材料.wps", "D:/cases/B公司/说明.txt", "D:/cases/B公司/附件.pdf"]
     }
   ],
   "exclude_files": ["D:/cases/招标文件.docx"],
@@ -113,12 +128,26 @@ Skill 会调用同一套 `checksim` 核心代码和 CLI，适配 Windows、macOS
     "similarity_backend": "local_ngrams",
     "image_ahash_distance": 6,
     "legacy_conversion_timeout": 120,
-    "soffice_path": ""
+    "soffice_path": "",
+    "pdf_ocr_mode": "auto",
+    "pdf_ocr_lang": "ch",
+    "pdf_min_text_chars": 20,
+    "pdf_ocr_engine": "onnxruntime",
+    "pdf_ocr_det_model": "PP-OCRv6_medium_det",
+    "pdf_ocr_rec_model": "PP-OCRv6_medium_rec"
   }
 }
 ```
 
 短文本过滤只影响相似度比对，不影响关键词/正则检测。
+
+PDF 相关参数：
+
+- `pdf_ocr_mode`: `auto` 表示文本层不足时才尝试 OCR；`always` 表示强制 OCR；`off` 表示不使用 OCR。
+- `pdf_ocr_lang`: OCR 语言，默认 `ch`，可按 PaddleOCR 支持语言调整。
+- `pdf_min_text_chars`: 判断 PDF 文本层是否足够的可见字符阈值，默认 `20`。
+- `pdf_ocr_engine`: 默认 `onnxruntime`。
+- `pdf_ocr_det_model` / `pdf_ocr_rec_model`: 默认使用 PP-OCRv6 medium 检测和识别模型，避免误用 PaddleOCR-VL。
 
 ## 报告说明
 
@@ -172,10 +201,16 @@ dist\标书文件查重工具.exe
 ./build_macos.sh
 ```
 
+默认 macOS/Windows 打包会把 PP-OCRv6 medium ONNX 模型放入程序。若只想构建轻量版，可设置：
+
+```bash
+CHECKSIM_BUNDLE_OCR=0 ./build_macos.sh
+```
+
 输出文件：
 
 ```text
-release/BidCheckSimilarity-v0.2.4-macOS-arm64.zip
+release/BidCheckSimilarity-v0.2.5-macOS-arm64.zip
 ```
 
 ## Star History

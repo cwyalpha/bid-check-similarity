@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import shutil
+import sys
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +13,7 @@ from urllib.parse import unquote, urlparse
 
 from docx import Document
 from PIL import Image
+from pypdf import PdfReader
 
 from .legacy import convert_legacy_to_docx
 from .models import CheckOptions, DocumentData, DocumentImage, SUPPORTED_EXTENSIONS, TextUnit, normalize_path
@@ -49,6 +51,8 @@ def parse_file(
         return _parse_docx(resolved, group_name, group_index, options)
     if suffix in {".doc", ".wps"}:
         return _parse_legacy_word(resolved, group_name, group_index, options, progress)
+    if suffix == ".pdf":
+        return _parse_pdf(resolved, group_name, group_index, options, progress)
     if suffix == ".txt":
         return _parse_text(resolved, group_name, group_index, options)
     return _parse_markdown(resolved, group_name, group_index, options)
@@ -118,6 +122,216 @@ def _parse_text(path: Path, group_name: str, group_index: int, options: CheckOpt
     metadata = _file_metadata(path)
     units = _build_units(path, group_name, group_index, blocks, options)
     return DocumentData(group_name, group_index, normalize_path(path), path.name, metadata, blocks, units, [])
+
+
+def _log(progress: Progress | None, message: str) -> None:
+    if progress is not None:
+        progress(message)
+
+
+def _parse_pdf(
+    path: Path,
+    group_name: str,
+    group_index: int,
+    options: CheckOptions,
+    progress: Progress | None,
+) -> DocumentData:
+    blocks, metadata = _pdf_text_blocks(path)
+    metadata["pdf_extraction"] = "text"
+    extracted_chars = visible_char_count("\n".join(blocks))
+    if options.pdf_ocr_mode == "off":
+        if extracted_chars == 0:
+            raise ValueError(f"PDF 未提取到文本: {path.name}。如果这是扫描件，请开启 OCR 或先转换为可复制文本的 PDF。")
+        units = _build_units(path, group_name, group_index, blocks, options)
+        return DocumentData(group_name, group_index, normalize_path(path), path.name, metadata, blocks, units, [])
+
+    if options.pdf_ocr_mode == "always" or (extracted_chars < options.pdf_min_text_chars and options.pdf_ocr_mode == "auto"):
+        _log(progress, f"  > PDF 文本层不足，尝试使用 PaddleOCR/PP-OCRv6 识别 {path.name}...")
+        blocks = _paddleocr_pdf_blocks(path, options)
+        metadata["pdf_extraction"] = "paddleocr"
+        extracted_chars = visible_char_count("\n".join(blocks))
+
+    if extracted_chars < options.pdf_min_text_chars:
+        raise ValueError(
+            f"PDF 未提取到足够文本: {path.name}。如果这是扫描件，请安装 PaddleOCR 3.7+ 及其推理引擎后重试，"
+            "或在配置中设置 pdf_ocr_mode=\"always\" 强制 OCR。"
+        )
+
+    units = _build_units(path, group_name, group_index, blocks, options)
+    return DocumentData(group_name, group_index, normalize_path(path), path.name, metadata, blocks, units, [])
+
+
+def _pdf_text_blocks(path: Path) -> tuple[list[str], dict[str, Any]]:
+    reader = PdfReader(str(path))
+    if getattr(reader, "is_encrypted", False):
+        try:
+            reader.decrypt("")
+        except Exception as exc:
+            raise ValueError(f"无法读取加密 PDF: {path.name}") from exc
+
+    blocks: list[str] = []
+    for page_index, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        for line in text.splitlines():
+            cleaned = re.sub(r"\s+", " ", line).strip()
+            if cleaned:
+                blocks.append(f"第{page_index}页: {cleaned}")
+
+    metadata = _file_metadata(path)
+    metadata.update(_pdf_metadata(reader, page_count=len(reader.pages)))
+    return blocks, metadata
+
+
+def _pdf_metadata(reader: PdfReader, page_count: int) -> dict[str, Any]:
+    raw = reader.metadata or {}
+
+    def value(key: str) -> str:
+        item = raw.get(key)
+        if item is None:
+            return ""
+        return str(item)
+
+    return {
+        "page_count": page_count,
+        "title": value("/Title"),
+        "author": value("/Author"),
+        "subject": value("/Subject"),
+        "creator": value("/Creator"),
+        "producer": value("/Producer"),
+    }
+
+
+def _paddleocr_pdf_blocks(path: Path, options: CheckOptions) -> list[str]:
+    try:
+        from paddleocr import PaddleOCR  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "PDF 文本层不足，扫描件 OCR 需要安装 PaddleOCR。请在对应环境执行: "
+            "python -m pip install paddleocr，并按 PaddleOCR 文档安装可用推理引擎。"
+        ) from exc
+
+    kwargs: dict[str, Any] = {
+        "lang": options.pdf_ocr_lang,
+        "ocr_version": "PP-OCRv6",
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "use_textline_orientation": False,
+    }
+    if options.pdf_ocr_engine:
+        kwargs["engine"] = options.pdf_ocr_engine
+    if options.pdf_ocr_det_model:
+        kwargs["text_detection_model_name"] = options.pdf_ocr_det_model
+    if options.pdf_ocr_rec_model:
+        kwargs["text_recognition_model_name"] = options.pdf_ocr_rec_model
+    model_root = _ocr_model_root()
+    if model_root is not None:
+        det_dir = _ocr_model_dir(model_root, options.pdf_ocr_det_model, options.pdf_ocr_engine)
+        rec_dir = _ocr_model_dir(model_root, options.pdf_ocr_rec_model, options.pdf_ocr_engine)
+        if det_dir is not None:
+            kwargs["text_detection_model_dir"] = str(det_dir)
+        if rec_dir is not None:
+            kwargs["text_recognition_model_dir"] = str(rec_dir)
+        if det_dir is not None and rec_dir is not None:
+            os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    try:
+        try:
+            ocr = PaddleOCR(**kwargs)
+        except TypeError:
+            kwargs.pop("ocr_version", None)
+            ocr = PaddleOCR(**kwargs)
+    except RuntimeError as exc:
+        cause = exc.__cause__
+        detail = f"{exc}"
+        if cause is not None:
+            detail = f"{detail} 原因: {cause}"
+        raise RuntimeError(f"PaddleOCR 初始化失败: {detail}") from exc
+
+    if hasattr(ocr, "predict"):
+        raw_results = ocr.predict(str(path))
+    else:
+        raw_results = ocr.ocr(str(path), cls=False)
+
+    blocks = _paddleocr_result_blocks(raw_results)
+    if not blocks:
+        raise RuntimeError(f"PaddleOCR 未识别到 PDF 文本: {path.name}")
+    return blocks
+
+
+def _ocr_model_root() -> Path | None:
+    candidates: list[Path] = []
+    env_root = os.environ.get("CHECKSIM_OCR_MODEL_DIR")
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            candidates.append(Path(meipass) / "ocr_models")
+        executable = Path(sys.executable).resolve()
+        candidates.append(executable.parent / "ocr_models")
+        if len(executable.parents) >= 2:
+            candidates.append(executable.parents[1] / "Resources" / "ocr_models")
+    candidates.append(Path(__file__).resolve().parents[1] / "packaging" / "ocr_models")
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _ocr_model_dir(root: Path, model_name: str, engine: str) -> Path | None:
+    if not model_name:
+        return None
+    names = [model_name]
+    if engine == "onnxruntime" and not model_name.endswith("_onnx"):
+        names.insert(0, f"{model_name}_onnx")
+    for name in names:
+        candidate = root / name
+        if (candidate / "inference.onnx").exists() or (candidate / "inference.json").exists():
+            return candidate
+    return None
+
+
+def _paddleocr_result_blocks(raw_results: Any) -> list[str]:
+    blocks: list[str] = []
+    for page_index, result in enumerate(_as_list(raw_results), start=1):
+        json_payload = getattr(result, "json", None)
+        payload = json_payload() if callable(json_payload) else json_payload if json_payload is not None else result
+        texts = _find_ocr_texts(payload)
+        for text in texts:
+            cleaned = re.sub(r"\s+", " ", str(text)).strip()
+            if cleaned:
+                blocks.append(f"第{page_index}页: {cleaned}")
+    return blocks
+
+
+def _find_ocr_texts(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        if "rec_texts" in value and isinstance(value["rec_texts"], (list, tuple)):
+            return [str(item) for item in value["rec_texts"] if str(item).strip()]
+        texts: list[str] = []
+        for item in value.values():
+            texts.extend(_find_ocr_texts(item))
+        return texts
+    if isinstance(value, (list, tuple)):
+        if len(value) == 2 and isinstance(value[0], str) and isinstance(value[1], (int, float)):
+            return [value[0]] if value[0].strip() else []
+        if value and all(isinstance(item, str) for item in value):
+            return [item for item in value if item.strip()]
+        texts = []
+        for item in value:
+            texts.extend(_find_ocr_texts(item))
+        return texts
+    return []
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
 
 
 def _build_units(path: Path, group_name: str, group_index: int, blocks: list[str], options: CheckOptions) -> list[TextUnit]:

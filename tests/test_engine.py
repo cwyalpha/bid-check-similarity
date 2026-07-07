@@ -10,7 +10,7 @@ from docx import Document
 from PIL import Image
 
 from checksim.engine import _hamming_hex, load_config, run_check
-from checksim.parsers import parse_file
+from checksim.parsers import _paddleocr_result_blocks, parse_file
 from checksim.models import CheckOptions
 from checksim.text import split_blocks_to_units
 
@@ -340,6 +340,35 @@ class CheckSimEngineTest(unittest.TestCase):
             self.assertIn("**这不是 Markdown 加粗标记**", text)
             self.assertTrue(parsed.units)
 
+    def test_pdf_text_layer_is_parsed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.pdf"
+            _make_pdf(path, "Alpha Company tender PDF text for procurement audit.")
+
+            parsed = parse_file(path, "PDF组", 0, CheckOptions(min_chars=1, pdf_ocr_mode="off"))
+            text = "\n".join(parsed.blocks)
+
+            self.assertIn("Alpha Company tender PDF text", text)
+            self.assertEqual(parsed.metadata["page_count"], 1)
+            self.assertEqual(parsed.metadata["pdf_extraction"], "text")
+            self.assertTrue(parsed.units)
+
+    def test_pdf_without_text_reports_clear_error_when_ocr_is_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blank.pdf"
+            _make_pdf(path, "")
+
+            with self.assertRaisesRegex(ValueError, "PDF 未提取到文本"):
+                parse_file(path, "PDF组", 0, CheckOptions(min_chars=1, pdf_ocr_mode="off"))
+
+    def test_paddleocr_result_blocks_extracts_rec_texts(self) -> None:
+        raw = [{"res": {"rec_texts": ["第一行", "第二行"]}}]
+        self.assertEqual(_paddleocr_result_blocks(raw), ["第1页: 第一行", "第1页: 第二行"])
+
+    def test_paddleocr_result_blocks_accepts_legacy_shape(self) -> None:
+        raw = [[[[0, 0], [10, 0], [10, 10], [0, 10]], ("Legacy OCR text", 0.98)]]
+        self.assertEqual(_paddleocr_result_blocks(raw), ["第1页: Legacy OCR text"])
+
 
 def _make_docx(path: Path, paragraphs: list[str], image_path: Path | None) -> None:
     doc = Document()
@@ -348,6 +377,32 @@ def _make_docx(path: Path, paragraphs: list[str], image_path: Path | None) -> No
     if image_path is not None:
         doc.add_picture(str(image_path))
     doc.save(path)
+
+
+def _make_pdf(path: Path, text: str) -> None:
+    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream = f"BT\n/F1 12 Tf\n72 720 Td\n({escaped}) Tj\nET\n".encode("latin-1")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"endstream",
+    ]
+    parts = [b"%PDF-1.4\n"]
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(sum(len(part) for part in parts))
+        parts.append(f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n")
+    xref_offset = sum(len(part) for part in parts)
+    parts.append(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    parts.append(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        parts.append(f"{offset:010d} 00000 n \n".encode("ascii"))
+    parts.append(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+    )
+    path.write_bytes(b"".join(parts))
 
 
 if __name__ == "__main__":

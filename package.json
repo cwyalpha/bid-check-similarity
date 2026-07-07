@@ -1,6 +1,6 @@
 {
   "name": "bid-check-similarity",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Offline bid and document similarity checker with an agent skill installer.",
   "private": false,
   "bin": {

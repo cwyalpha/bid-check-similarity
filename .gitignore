@@ -12,6 +12,7 @@ dist/
 release/
 outputs/
 sample_cases/**/outputs/
+packaging/ocr_models/
 *.spec
 
 video_frames/
