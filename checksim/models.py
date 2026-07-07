@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 SUPPORTED_EXTENSIONS = {".docx", ".doc", ".wps", ".pdf", ".md", ".txt"}
+if _env_flag("CHECKSIM_DISABLE_PDF"):
+    SUPPORTED_EXTENSIONS = SUPPORTED_EXTENSIONS - {".pdf"}
 
 
 @dataclass

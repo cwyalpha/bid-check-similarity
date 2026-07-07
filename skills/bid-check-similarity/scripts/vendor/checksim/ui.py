@@ -765,7 +765,7 @@ def _help_text() -> str:
             "2. 支持 .docx、.doc、.wps、.pdf、.md、.txt；PDF 会优先读取可复制文本，Markdown 附带的本地图片会参与图片重复检测，txt 按纯文本解析。",
             "3. .doc/.wps 不会直接改原文件，程序会先转成临时 .docx 再解析。",
             "4. Windows 下按 WPS、Microsoft Office、LibreOffice 顺序尝试转换；Linux/macOS 下使用 LibreOffice。",
-            "5. 桌面打包版内置 PaddleOCR/PP-OCRv6，可处理扫描版 PDF；源码或 Skill 运行时需安装 OCR 依赖。",
+            "5. 桌面打包版内置 PaddleOCR/PP-OCRv6，可处理扫描版 PDF；源码运行时需安装 OCR 依赖。",
             "6. 如果旧格式转换失败，请先在 WPS/Word/LibreOffice 中另存为 .docx 再导入。",
             "",
             "二、添加投标文件分组",

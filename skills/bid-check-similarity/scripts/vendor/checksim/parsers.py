@@ -13,7 +13,6 @@ from urllib.parse import unquote, urlparse
 
 from docx import Document
 from PIL import Image
-from pypdf import PdfReader
 
 from .legacy import convert_legacy_to_docx
 from .models import CheckOptions, DocumentData, DocumentImage, SUPPORTED_EXTENSIONS, TextUnit, normalize_path
@@ -162,6 +161,11 @@ def _parse_pdf(
 
 
 def _pdf_text_blocks(path: Path) -> tuple[list[str], dict[str, Any]]:
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise RuntimeError("读取 PDF 需要安装 pypdf；桌面打包版已内置，源码运行请先安装项目依赖。") from exc
+
     reader = PdfReader(str(path))
     if getattr(reader, "is_encrypted", False):
         try:
@@ -182,7 +186,7 @@ def _pdf_text_blocks(path: Path) -> tuple[list[str], dict[str, Any]]:
     return blocks, metadata
 
 
-def _pdf_metadata(reader: PdfReader, page_count: int) -> dict[str, Any]:
+def _pdf_metadata(reader: Any, page_count: int) -> dict[str, Any]:
     raw = reader.metadata or {}
 
     def value(key: str) -> str:

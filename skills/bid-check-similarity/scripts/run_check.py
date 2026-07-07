@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ def _add_core_paths() -> None:
 
 
 def main() -> int:
+    os.environ["CHECKSIM_DISABLE_PDF"] = "1"
     _add_core_paths()
     try:
         from checksim.cli import main as cli_main

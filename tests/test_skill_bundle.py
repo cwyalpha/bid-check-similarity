@@ -26,6 +26,17 @@ class SkillBundleTest(unittest.TestCase):
                 f"Skill vendor is stale: {relative_path}",
             )
 
+    def test_skill_requirements_stay_lightweight(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        skill_dir = repo_root / "skills" / "bid-check-similarity"
+        requirements = (skill_dir / "scripts" / "requirements.txt").read_text(encoding="utf-8").lower()
+
+        self.assertNotIn("pypdf", requirements)
+        self.assertNotIn("paddleocr", requirements)
+        self.assertNotIn("onnxruntime", requirements)
+        self.assertNotIn("pypdfium2", requirements)
+        self.assertFalse((skill_dir / "scripts" / "requirements-ocr.txt").exists())
+
     def test_skill_directory_runs_without_repo_root_imports(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         source_skill = repo_root / "skills" / "bid-check-similarity"
@@ -78,6 +89,49 @@ class SkillBundleTest(unittest.TestCase):
             self.assertTrue((output_dir / "ai_summary.json").exists())
             summary = json.loads((output_dir / "ai_summary.json").read_text(encoding="utf-8"))
             self.assertGreaterEqual(summary["stats"]["similar_match_count"], 1)
+
+    def test_skill_rejects_pdf_without_loading_ocr_stack(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        source_skill = repo_root / "skills" / "bid-check-similarity"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundled_skill = root / "bid-check-similarity"
+            shutil.copytree(source_skill, bundled_skill, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+            case_dir = root / "case"
+            case_dir.mkdir()
+            left = case_dir / "A公司.pdf"
+            right = case_dir / "B公司.txt"
+            left.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            right.write_text("本项目采用统一身份认证、安全审计和日志留存方案。", encoding="utf-8")
+            config = {
+                "groups": [
+                    {"name": "A公司", "files": [str(left)]},
+                    {"name": "B公司", "files": [str(right)]},
+                ],
+                "options": {"min_chars": 10, "similarity_threshold": 0.72},
+            }
+            config_path = case_dir / "case.json"
+            config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(bundled_skill / "scripts" / "run_check.py"),
+                    "--config",
+                    str(config_path),
+                    "--output",
+                    str(root / "outputs"),
+                    "--quiet",
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("暂不支持的文件格式", completed.stderr)
 
 
 if __name__ == "__main__":
