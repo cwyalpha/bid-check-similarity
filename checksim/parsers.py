@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -145,10 +146,18 @@ def _parse_pdf(
         return DocumentData(group_name, group_index, normalize_path(path), path.name, metadata, blocks, units, [])
 
     if options.pdf_ocr_mode == "always" or (extracted_chars < options.pdf_min_text_chars and options.pdf_ocr_mode == "auto"):
-        _log(progress, f"  > PDF 文本层不足，尝试使用 PaddleOCR/PP-OCRv6 识别 {path.name}...")
-        blocks = _paddleocr_pdf_blocks(path, options)
+        page_count = metadata.get("page_count")
+        page_hint = f"，共 {page_count} 页" if isinstance(page_count, int) and page_count > 0 else ""
+        reason = "强制 OCR" if options.pdf_ocr_mode == "always" else "文本层不足"
+        _log(progress, f"  > PDF {reason}，准备使用 PaddleOCR/PP-OCRv6 识别 {path.name}{page_hint}...")
+        ocr_started = time.perf_counter()
+        blocks = _paddleocr_pdf_blocks(path, options, progress)
         metadata["pdf_extraction"] = "paddleocr"
         extracted_chars = visible_char_count("\n".join(blocks))
+        _log(
+            progress,
+            f"  > OCR 完成: {path.name}，识别出 {len(blocks)} 段文本，用时 {time.perf_counter() - ocr_started:.1f} 秒。",
+        )
 
     if extracted_chars < options.pdf_min_text_chars:
         raise ValueError(
@@ -205,7 +214,8 @@ def _pdf_metadata(reader: Any, page_count: int) -> dict[str, Any]:
     }
 
 
-def _paddleocr_pdf_blocks(path: Path, options: CheckOptions) -> list[str]:
+def _paddleocr_pdf_blocks(path: Path, options: CheckOptions, progress: Progress | None = None) -> list[str]:
+    _log(progress, "  > OCR: 正在加载 PaddleOCR 组件...")
     try:
         from paddleocr import PaddleOCR  # type: ignore[import-not-found]
     except ImportError as exc:
@@ -237,6 +247,10 @@ def _paddleocr_pdf_blocks(path: Path, options: CheckOptions) -> list[str]:
             kwargs["text_recognition_model_dir"] = str(rec_dir)
         if det_dir is not None and rec_dir is not None:
             os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+            _log(progress, "  > OCR: 已找到内置 PP-OCRv6 模型，正在初始化...")
+    else:
+        _log(progress, "  > OCR: 未找到内置模型目录，将使用 PaddleOCR 默认模型缓存。")
+    _log(progress, "  > OCR: 正在初始化模型，首次运行或大文件可能较慢...")
     try:
         try:
             ocr = PaddleOCR(**kwargs)
@@ -250,11 +264,13 @@ def _paddleocr_pdf_blocks(path: Path, options: CheckOptions) -> list[str]:
             detail = f"{detail} 原因: {cause}"
         raise RuntimeError(f"PaddleOCR 初始化失败: {detail}") from exc
 
+    _log(progress, f"  > OCR: 模型初始化完成，正在识别 {path.name}...")
     if hasattr(ocr, "predict"):
         raw_results = ocr.predict(str(path))
     else:
         raw_results = ocr.ocr(str(path), cls=False)
 
+    _log(progress, "  > OCR: 识别完成，正在整理文本...")
     blocks = _paddleocr_result_blocks(raw_results)
     if not blocks:
         raise RuntimeError(f"PaddleOCR 未识别到 PDF 文本: {path.name}")

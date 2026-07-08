@@ -361,6 +361,31 @@ class CheckSimEngineTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "PDF 未提取到文本"):
                 parse_file(path, "PDF组", 0, CheckOptions(min_chars=1, pdf_ocr_mode="off"))
 
+    def test_pdf_ocr_reports_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scan.pdf"
+            _make_pdf(path, "")
+            messages: list[str] = []
+
+            with patch("checksim.parsers._pdf_text_blocks", return_value=([], {"page_count": 2})), patch(
+                "checksim.parsers._paddleocr_pdf_blocks",
+                return_value=["第1页: 识别文本"],
+            ):
+                parsed = parse_file(
+                    path,
+                    "PDF组",
+                    0,
+                    CheckOptions(min_chars=1, pdf_ocr_mode="always", pdf_min_text_chars=1),
+                    messages.append,
+                )
+
+            joined = "\n".join(messages)
+            self.assertIn("准备使用 PaddleOCR/PP-OCRv6 识别", joined)
+            self.assertIn("共 2 页", joined)
+            self.assertIn("OCR 完成", joined)
+            self.assertIn("识别出 1 段文本", joined)
+            self.assertEqual(parsed.metadata["pdf_extraction"], "paddleocr")
+
     def test_paddleocr_result_blocks_extracts_rec_texts(self) -> None:
         raw = [{"res": {"rec_texts": ["第一行", "第二行"]}}]
         self.assertEqual(_paddleocr_result_blocks(raw), ["第1页: 第一行", "第1页: 第二行"])
