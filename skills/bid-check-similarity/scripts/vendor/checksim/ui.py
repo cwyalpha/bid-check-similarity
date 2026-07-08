@@ -25,6 +25,16 @@ SUPPORTED_FILETYPES = [
     ("Text", "*.txt"),
 ]
 
+UI_BG = "#f6f7f9"
+UI_PANEL_BG = "#ffffff"
+UI_FIELD_BG = "#ffffff"
+UI_TEXT = "#111827"
+UI_MUTED = "#374151"
+UI_BORDER = "#d1d5db"
+UI_ACCENT = "#0f766e"
+UI_SELECT_BG = "#2563eb"
+UI_SELECT_FG = "#ffffff"
+
 
 PARAM_HELP = {
     "keywords": (
@@ -74,7 +84,7 @@ PARAM_HELP = {
 class _ScrollableFrame(ttk.Frame):
     def __init__(self, master: tk.Misc, **kwargs: object) -> None:
         super().__init__(master, **kwargs)
-        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0)
+        self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, background=UI_BG)
         self.scrollbar = ttk.Scrollbar(self, orient=VERTICAL, command=self.canvas.yview)
         self.content = ttk.Frame(self.canvas)
         self.window_id = self.canvas.create_window((0, 0), window=self.content, anchor="nw")
@@ -140,7 +150,7 @@ class CheckSimApp(ttk.Frame):
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 10))
         ttk.Label(header, text="标书/文件查重工具", font=("Microsoft YaHei UI", 16, "bold")).pack(side=LEFT)
-        ttk.Label(header, textvariable=self.status, foreground="#0f766e").pack(side=RIGHT)
+        ttk.Label(header, textvariable=self.status, foreground=UI_ACCENT).pack(side=RIGHT)
 
         body = ttk.PanedWindow(self, orient="horizontal")
         body.pack(fill=BOTH, expand=True)
@@ -187,6 +197,7 @@ class CheckSimApp(ttk.Frame):
         frame = ttk.LabelFrame(parent, text="2. 可选排除文件 B")
         frame.pack(fill="both", expand=False, pady=(0, 8))
         self.exclude_list = tk.Listbox(frame, height=4)
+        _style_listbox(self.exclude_list)
         self.exclude_list.pack(fill="x", padx=8, pady=8)
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", padx=8, pady=(0, 8))
@@ -207,6 +218,7 @@ class CheckSimApp(ttk.Frame):
             command=lambda: self._show_param_help("keywords"),
         ).pack(side=LEFT, padx=(6, 0))
         self.keyword_text = tk.Text(frame, height=4, wrap="word")
+        _style_text(self.keyword_text)
         self.keyword_text.pack(fill="x", padx=8, pady=(0, 8))
 
         options = ttk.Frame(frame)
@@ -236,6 +248,7 @@ class CheckSimApp(ttk.Frame):
         frame = ttk.LabelFrame(parent, text="进度日志")
         frame.pack(fill=BOTH, expand=True, pady=(0, 8))
         self.log_text = tk.Text(frame, height=14, wrap="word", state="disabled")
+        _style_text(self.log_text)
         scrollbar = ttk.Scrollbar(frame, orient=VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
         self.log_text.pack(side=LEFT, fill=BOTH, expand=True, padx=(8, 0), pady=8)
@@ -245,6 +258,7 @@ class CheckSimApp(ttk.Frame):
         frame = ttk.LabelFrame(parent, text="历史报告")
         frame.pack(fill="both", expand=False)
         self.history_list = tk.Listbox(frame, height=7)
+        _style_listbox(self.history_list)
         self.history_list.pack(fill="x", padx=8, pady=8)
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", padx=8, pady=(0, 8))
@@ -597,6 +611,7 @@ class CheckSimApp(ttk.Frame):
         win.transient(self.master)
 
         text = tk.Text(win, wrap="word", padx=14, pady=12)
+        _style_text(text)
         scrollbar = ttk.Scrollbar(win, orient=VERTICAL, command=text.yview)
         text.configure(yscrollcommand=scrollbar.set)
         text.pack(side=LEFT, fill=BOTH, expand=True)
@@ -841,12 +856,67 @@ def _open_path(path: str) -> None:
         subprocess.Popen(["xdg-open", path])
 
 
-def main() -> None:
-    root = tk.Tk()
+def _style_text(widget: tk.Text) -> None:
+    widget.configure(
+        background=UI_FIELD_BG,
+        foreground=UI_TEXT,
+        insertbackground=UI_TEXT,
+        selectbackground=UI_SELECT_BG,
+        selectforeground=UI_SELECT_FG,
+        highlightbackground=UI_BORDER,
+        highlightcolor=UI_SELECT_BG,
+        relief="solid",
+        borderwidth=1,
+    )
+
+
+def _style_listbox(widget: tk.Listbox) -> None:
+    widget.configure(
+        background=UI_FIELD_BG,
+        foreground=UI_TEXT,
+        selectbackground=UI_SELECT_BG,
+        selectforeground=UI_SELECT_FG,
+        highlightbackground=UI_BORDER,
+        highlightcolor=UI_SELECT_BG,
+        relief="solid",
+        borderwidth=1,
+    )
+
+
+def _configure_theme(root: tk.Tk) -> None:
+    root.configure(background=UI_BG)
+    root.option_add("*Background", UI_BG)
+    root.option_add("*Foreground", UI_TEXT)
+    root.option_add("*selectBackground", UI_SELECT_BG)
+    root.option_add("*selectForeground", UI_SELECT_FG)
+    root.option_add("*insertBackground", UI_TEXT)
+
+    style = ttk.Style(root)
     try:
-        ttk.Style().theme_use("clam")
+        style.theme_use("clam")
     except tk.TclError:
         pass
+    style.configure(".", background=UI_BG, foreground=UI_TEXT, fieldbackground=UI_FIELD_BG)
+    style.configure("TFrame", background=UI_BG)
+    style.configure("TLabelframe", background=UI_BG, bordercolor=UI_BORDER, relief="groove")
+    style.configure("TLabelframe.Label", background=UI_BG, foreground=UI_TEXT)
+    style.configure("TLabel", background=UI_BG, foreground=UI_TEXT)
+    style.configure("TButton", background="#e5e7eb", foreground=UI_TEXT, bordercolor=UI_BORDER, focusthickness=1)
+    style.map(
+        "TButton",
+        background=[("active", "#dbeafe"), ("pressed", "#bfdbfe"), ("disabled", "#f3f4f6")],
+        foreground=[("disabled", "#9ca3af")],
+    )
+    style.configure("TEntry", fieldbackground=UI_FIELD_BG, foreground=UI_TEXT, bordercolor=UI_BORDER)
+    style.configure("Treeview", background=UI_FIELD_BG, fieldbackground=UI_FIELD_BG, foreground=UI_TEXT, bordercolor=UI_BORDER)
+    style.configure("Treeview.Heading", background="#e5e7eb", foreground=UI_TEXT, bordercolor=UI_BORDER)
+    style.map("Treeview", background=[("selected", UI_SELECT_BG)], foreground=[("selected", UI_SELECT_FG)])
+    style.configure("TScrollbar", background="#e5e7eb", troughcolor=UI_BG, bordercolor=UI_BORDER, arrowcolor=UI_MUTED)
+
+
+def main() -> None:
+    root = tk.Tk()
+    _configure_theme(root)
     CheckSimApp(root)
     root.mainloop()
 

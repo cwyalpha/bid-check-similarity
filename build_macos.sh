@@ -77,6 +77,10 @@ PYINSTALLER_ARGS+=(run_app.py)
 
 python -m PyInstaller "${PYINSTALLER_ARGS[@]}"
 
+PLIST_PATH="dist/${APP_NAME}.app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :NSRequiresAquaSystemAppearance bool true" "${PLIST_PATH}" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :NSRequiresAquaSystemAppearance true" "${PLIST_PATH}"
+
 rm -f "release/${ASSET_NAME}"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "dist/${APP_NAME}.app" "release/${ASSET_NAME}"
 
