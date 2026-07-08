@@ -833,10 +833,10 @@ def _parse_float(value: str, label: str) -> float:
 
 
 def _open_path(path: str) -> None:
-    if os.name == "nt":
-        os.startfile(path)  # type: ignore[attr-defined]
-    elif sys.platform == "darwin":
+    if sys.platform == "darwin":
         subprocess.Popen(["open", path])
+    elif os.name == "nt":
+        os.startfile(path)  # type: ignore[attr-defined]
     else:
         subprocess.Popen(["xdg-open", path])
 

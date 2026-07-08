@@ -14,17 +14,33 @@ class SkillBundleTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         source_dir = repo_root / "checksim"
         vendor_dir = repo_root / "skills" / "bid-check-similarity" / "scripts" / "vendor" / "checksim"
+        lightweight_files = {Path("models.py"), Path("parsers.py")}
 
         source_files = sorted(path.relative_to(source_dir) for path in source_dir.glob("*.py"))
         vendor_files = sorted(path.relative_to(vendor_dir) for path in vendor_dir.glob("*.py"))
 
         self.assertEqual(vendor_files, source_files)
         for relative_path in source_files:
+            if relative_path in lightweight_files:
+                continue
             self.assertEqual(
                 (vendor_dir / relative_path).read_text(encoding="utf-8"),
                 (source_dir / relative_path).read_text(encoding="utf-8"),
                 f"Skill vendor is stale: {relative_path}",
             )
+
+    def test_skill_vendor_excludes_pdf_and_ocr_code(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        vendor_dir = repo_root / "skills" / "bid-check-similarity" / "scripts" / "vendor" / "checksim"
+        combined = "\n".join(
+            [
+                (vendor_dir / "models.py").read_text(encoding="utf-8"),
+                (vendor_dir / "parsers.py").read_text(encoding="utf-8"),
+            ]
+        ).lower()
+
+        for forbidden in ("pdf", "pypdf", "paddleocr", "onnxruntime", "_parse_pdf", "pdf_ocr"):
+            self.assertNotIn(forbidden, combined)
 
     def test_skill_requirements_stay_lightweight(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

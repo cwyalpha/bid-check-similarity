@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import ssl
 from pathlib import Path
 
 
@@ -22,6 +23,7 @@ def main() -> int:
         print(f"PP-OCR models already cached in {output}")
         return 0
 
+    _patch_default_ssl_certs()
     from paddleocr import PaddleOCR
 
     os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "hf")
@@ -53,6 +55,26 @@ def _cache_name(model_name: str, engine: str) -> str:
     if engine == "onnxruntime" and not model_name.endswith("_onnx"):
         return f"{model_name}_onnx"
     return model_name
+
+
+def _patch_default_ssl_certs() -> None:
+    try:
+        ssl.create_default_context()
+        return
+    except ssl.SSLError:
+        pass
+
+    try:
+        import certifi
+    except ImportError:
+        return
+
+    cafile = certifi.where()
+
+    def load_default_certs(self: ssl.SSLContext, purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH) -> None:
+        self.load_verify_locations(cafile=cafile)
+
+    ssl.SSLContext.load_default_certs = load_default_certs  # type: ignore[method-assign]
 
 
 if __name__ == "__main__":

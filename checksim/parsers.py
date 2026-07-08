@@ -216,6 +216,7 @@ def _pdf_metadata(reader: Any, page_count: int) -> dict[str, Any]:
 
 def _paddleocr_pdf_blocks(path: Path, options: CheckOptions, progress: Progress | None = None) -> list[str]:
     _log(progress, "  > OCR: 正在加载 PaddleOCR 组件...")
+    _patch_default_ssl_certs()
     try:
         from paddleocr import PaddleOCR  # type: ignore[import-not-found]
     except ImportError as exc:
@@ -275,6 +276,31 @@ def _paddleocr_pdf_blocks(path: Path, options: CheckOptions, progress: Progress 
     if not blocks:
         raise RuntimeError(f"PaddleOCR 未识别到 PDF 文本: {path.name}")
     return blocks
+
+
+def _patch_default_ssl_certs() -> None:
+    try:
+        import ssl
+    except ImportError:
+        return
+
+    try:
+        ssl.create_default_context()
+        return
+    except ssl.SSLError:
+        pass
+
+    try:
+        import certifi
+    except ImportError:
+        return
+
+    cafile = certifi.where()
+
+    def load_default_certs(self: ssl.SSLContext, purpose: ssl.Purpose = ssl.Purpose.SERVER_AUTH) -> None:
+        self.load_verify_locations(cafile=cafile)
+
+    ssl.SSLContext.load_default_certs = load_default_certs  # type: ignore[method-assign]
 
 
 def _ocr_model_root() -> Path | None:
