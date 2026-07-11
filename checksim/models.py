@@ -233,6 +233,8 @@ class KeywordHit:
     file_name: str
     location: str
     snippet: str
+    matched_text: str = ""
+    pattern: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -243,6 +245,8 @@ class KeywordHit:
             "file_name": self.file_name,
             "location": self.location,
             "snippet": self.snippet,
+            "matched_text": self.matched_text,
+            "pattern": self.pattern,
         }
 
 
@@ -252,6 +256,8 @@ class KeywordAlert:
     is_regex: bool
     groups: list[str]
     hits: list[KeywordHit]
+    matched_text: str = ""
+    pattern: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -259,6 +265,8 @@ class KeywordAlert:
             "is_regex": self.is_regex,
             "groups": self.groups,
             "hits": [hit.to_dict() for hit in self.hits],
+            "matched_text": self.matched_text,
+            "pattern": self.pattern,
         }
 
 

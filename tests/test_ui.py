@@ -13,6 +13,7 @@ from checksim.ui import (
     _groups_from_single_files,
     _open_path,
     _output_root,
+    _split_keyword_rules,
 )
 
 
@@ -93,10 +94,47 @@ class CheckSimUiTest(unittest.TestCase):
 
             self.assertEqual(options["min_chars"], 10)
             self.assertEqual(options["similarity_backend"], "local_ngrams")
+            self.assertEqual(
+                config["regex_presets"],
+                {
+                    "china_mobile": True,
+                    "china_id_card": True,
+                    "email": True,
+                    "china_address": True,
+                },
+            )
             self.assertNotIn("max_matches_per_pair", options)
             self.assertNotIn("write_all_matches", options)
         finally:
             root.destroy()
+
+    def test_collects_plain_and_regex_editors_separately(self) -> None:
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            app = CheckSimApp(root)
+            app.groups = [
+                {"name": "A公司", "files": ["A.txt"]},
+                {"name": "B公司", "files": ["B.txt"]},
+            ]
+            app.keyword_text.insert("1.0", "甲公司\n项目经理张三")
+            app.regex_text.insert("1.0", r"项目编号[A-Z]{2}-\d{3}" + "\n" + r"re:合同号\d+")
+
+            config = app._collect_config()
+
+            self.assertEqual(config["keywords"], ["甲公司", "项目经理张三"])
+            self.assertEqual(config["regex_keywords"], [r"项目编号[A-Z]{2}-\d{3}", r"re:合同号\d+"])
+        finally:
+            root.destroy()
+
+    def test_split_keyword_rules_migrates_legacy_re_entries(self) -> None:
+        keywords, regex_keywords = _split_keyword_rules(
+            ["甲公司", r"re:1[3-9]\d{9}"],
+            [r"身份证\d+", r"re:邮箱.+"],
+        )
+
+        self.assertEqual(keywords, ["甲公司"])
+        self.assertEqual(regex_keywords, [r"1[3-9]\d{9}", r"身份证\d+", r"邮箱.+"])
 
     def test_completion_message_reports_full_counts(self) -> None:
         message = _completion_message(

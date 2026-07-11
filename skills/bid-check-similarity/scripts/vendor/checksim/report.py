@@ -187,6 +187,8 @@ def _ai_keyword_alerts(result: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "keyword": alert.get("keyword", ""),
                 "is_regex": bool(alert.get("is_regex")),
+                "pattern": alert.get("pattern", ""),
+                "matched_text": alert.get("matched_text", ""),
                 "groups": alert.get("groups", []),
                 "hit_count": len(hits),
                 "sample_hits": [
@@ -194,6 +196,7 @@ def _ai_keyword_alerts(result: dict[str, Any]) -> list[dict[str, Any]]:
                         "group_name": hit.get("group_name", ""),
                         "file_name": hit.get("file_name", ""),
                         "location": hit.get("location", ""),
+                        "matched_text": hit.get("matched_text", ""),
                         "snippet": _shorten_ai_text(hit.get("snippet", ""), 220),
                     }
                     for hit in hits[:10]
@@ -405,22 +408,24 @@ def _keyword_section(result: dict[str, Any]) -> str:
             f"<td>{index}</td>"
             f"<td>{escape(alert.get('keyword', ''))}</td>"
             f"<td>{'正则' if alert.get('is_regex') else '关键词'}</td>"
+            f"<td class='snippet'>{escape(alert.get('matched_text', ''))}</td>"
             f"<td>{escape(', '.join(alert.get('groups', [])))}</td>"
             f"<td>{len(hits)}</td>"
             f"<td class='snippet'>{samples}</td>"
             "</tr>"
         )
-    body = "".join(rows) or "<tr><td colspan='6' class='empty'>未发现跨 2 组以上的重要关键词异常。</td></tr>"
+    body = "".join(rows) or "<tr><td colspan='7' class='empty'>未发现跨 2 组以上的重要关键词或正则同值异常。</td></tr>"
     errors = result.get("keyword_errors") or []
     error_html = ""
     if errors:
         error_html = "<p class='warn'>正则错误：" + "；".join(escape(error) for error in errors) + "</p>"
     return f"""
 <section class="panel">
-  <h2>重要关键词异常</h2>
+  <h2>重要关键词与正则异常</h2>
+  <p class="muted">普通关键词跨组出现即预警；正则规则仅在同一个实际匹配内容跨 2 个及以上分组出现时预警。</p>
   {error_html}
   <table>
-    <thead><tr><th>序号</th><th>规则</th><th>类型</th><th>命中组</th><th>命中数</th><th>样例</th></tr></thead>
+    <thead><tr><th>序号</th><th>规则</th><th>类型</th><th>重复内容</th><th>命中组</th><th>命中数</th><th>样例</th></tr></thead>
     <tbody>{body}</tbody>
   </table>
 </section>

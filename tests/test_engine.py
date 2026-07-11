@@ -98,6 +98,7 @@ class CheckSimEngineTest(unittest.TestCase):
             self.assertEqual(ai_summary["output_files"]["result_json"], result["output_files"]["result_json"])
             self.assertGreaterEqual(ai_summary["evidence"]["similar_text"]["sample_count"], 1)
             self.assertGreaterEqual(ai_summary["evidence"]["keyword_alerts"][0]["hit_count"], 2)
+            self.assertIn("matched_text", ai_summary["evidence"]["keyword_alerts"][0])
             self.assertNotIn("documents", ai_summary)
 
             compare_path = Path(result["output_files"]["compare_pages"][0]["path"])
@@ -110,6 +111,108 @@ class CheckSimEngineTest(unittest.TestCase):
             self.assertIn("doc-stream", compare_html)
             self.assertNotIn("https://", compare_html)
             self.assertNotIn("<script src", compare_html)
+
+    def test_regex_alerts_require_the_same_matched_value_across_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            contents = {
+                "A公司": (
+                    "联系人13800138000，邮箱same@example.com，身份证110105199003071234，"
+                    "地址北京市朝阳区建国路88号，项目编号AB-123。"
+                ),
+                "B公司": (
+                    "联系人13900139000，邮箱other@example.com，身份证110105199103071235，"
+                    "地址上海市浦东新区世纪大道100号，项目编号CD-456。"
+                ),
+                "C公司": (
+                    "联系人13800138000，邮箱same@example.com，身份证110105199003071234，"
+                    "地址北京市朝阳区建国路88号，项目编号AB-123。"
+                ),
+            }
+            groups = []
+            for group_name, content in contents.items():
+                path = root / f"{group_name}.txt"
+                path.write_text(content, encoding="utf-8")
+                groups.append({"name": group_name, "files": [str(path)]})
+
+            result = run_check(
+                {
+                    "groups": groups,
+                    "regex_keywords": [r"项目编号[A-Z]{2}-\d{3}"],
+                },
+                root / "outputs",
+            )
+
+            alerts = {(alert["keyword"], alert["matched_text"]): alert for alert in result["keyword_alerts"]}
+            expected_values = {
+                "中国大陆手机号（预设）": "13800138000",
+                "中国大陆身份证（预设）": "110105199003071234",
+                "邮箱地址（预设）": "same@example.com",
+                "地址（预设）": "北京市朝阳区建国路88号",
+                r"项目编号[A-Z]{2}-\d{3}": "项目编号AB-123",
+            }
+            for rule, value in expected_values.items():
+                self.assertIn((rule, value), alerts)
+                self.assertEqual(alerts[(rule, value)]["groups"], ["A公司", "C公司"])
+            self.assertFalse(any(alert["matched_text"] == "13900139000" for alert in result["keyword_alerts"]))
+            self.assertFalse(any(alert["matched_text"] == "项目编号CD-456" for alert in result["keyword_alerts"]))
+            report_html = Path(result["output_files"]["report_html"]).read_text(encoding="utf-8")
+            self.assertIn("实际匹配内容", report_html)
+            self.assertIn("13800138000", report_html)
+            ai_summary = json.loads(Path(result["output_files"]["ai_summary_json"]).read_text(encoding="utf-8"))
+            self.assertTrue(any(alert["matched_text"] == "13800138000" for alert in ai_summary["evidence"]["keyword_alerts"]))
+
+    def test_regex_presets_can_all_be_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            groups = []
+            for name in ("A公司", "B公司"):
+                path = root / f"{name}.txt"
+                path.write_text("共同联系人13800138000，邮箱same@example.com。", encoding="utf-8")
+                groups.append({"name": name, "files": [str(path)]})
+
+            result = run_check(
+                {
+                    "groups": groups,
+                    "regex_presets": {
+                        "china_mobile": False,
+                        "china_id_card": False,
+                        "email": False,
+                        "china_address": False,
+                    },
+                }
+            )
+
+            self.assertEqual(result["keyword_alerts"], [])
+            self.assertEqual(result["input"]["regex_presets"]["email"], False)
+
+    def test_legacy_re_keyword_uses_same_value_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            groups = []
+            for name, value in (("A公司", "ZX-100"), ("B公司", "ZX-200"), ("C公司", "ZX-100")):
+                path = root / f"{name}.txt"
+                path.write_text(f"项目编号{value}。", encoding="utf-8")
+                groups.append({"name": name, "files": [str(path)]})
+
+            result = run_check(
+                {
+                    "groups": groups,
+                    "keywords": [r"re:ZX-\d{3}"],
+                    "regex_presets": {
+                        "china_mobile": False,
+                        "china_id_card": False,
+                        "email": False,
+                        "china_address": False,
+                    },
+                }
+            )
+
+            self.assertEqual(len(result["keyword_alerts"]), 1)
+            self.assertEqual(result["keyword_alerts"][0]["matched_text"], "ZX-100")
+            self.assertEqual(result["keyword_alerts"][0]["groups"], ["A公司", "C公司"])
+            self.assertEqual(result["input"]["keywords"], [])
+            self.assertEqual(result["input"]["regex_keywords"], [r"ZX-\d{3}"])
 
     def test_docx_tables_are_parsed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

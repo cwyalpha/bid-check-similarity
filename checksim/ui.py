@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .engine import load_config, run_check
+from .keyword_rules import REGEX_PRESETS, default_regex_presets, normalize_regex_presets
 from .models import CheckOptions, SUPPORTED_EXTENSIONS, normalize_path
 
 
@@ -25,13 +26,42 @@ SUPPORTED_FILETYPES = [
     ("Text", "*.txt"),
 ]
 
+REGEX_PRESET_UI_LABELS = {
+    "china_mobile": "大陆手机号",
+    "china_id_card": "大陆身份证号",
+    "email": "邮箱地址",
+    "china_address": "地址",
+}
+
 
 PARAM_HELP = {
     "keywords": (
-        "重要关键词/正则",
-        "每行一条规则。普通文本按字面量匹配；以 re: 开头时按正则匹配。"
-        "关键词不受短文本过滤影响，只要同一规则出现在 2 个及以上公司/分组中，就会在报告中标为异常。"
-        "建议填写公司名称、法人/负责人、项目人员姓名、手机号、统一社会信用代码、供应商专有产品名等。",
+        "重要关键词",
+        "每行一条普通关键词，按字面量匹配。关键词不受短文本过滤影响；"
+        "只要同一关键词出现在 2 个及以上公司/分组中，就会在报告中标为异常。"
+        "建议填写公司名称、法人/负责人、项目人员姓名、统一社会信用代码、供应商专有产品名等。",
+    ),
+    "regex_keywords": (
+        "正则表达式",
+        "每行一条正则表达式，无需添加 re: 前缀。正则规则会按实际命中内容分别统计；"
+        "只有同一个命中值出现在 2 个及以上公司/分组中才会预警。"
+        "例如手机号规则在两家公司分别匹配到不同号码时不会预警，匹配到同一个号码时才会预警。",
+    ),
+    "china_mobile": (
+        "中国手机号预设",
+        REGEX_PRESETS["china_mobile"].description + "\n\n正则：" + REGEX_PRESETS["china_mobile"].pattern,
+    ),
+    "china_id_card": (
+        "中国身份证号预设",
+        REGEX_PRESETS["china_id_card"].description + "\n\n正则：" + REGEX_PRESETS["china_id_card"].pattern,
+    ),
+    "email": (
+        "邮箱地址预设",
+        REGEX_PRESETS["email"].description + "\n\n正则：" + REGEX_PRESETS["email"].pattern,
+    ),
+    "china_address": (
+        "地址预设",
+        REGEX_PRESETS["china_address"].description + "\n\n正则：" + REGEX_PRESETS["china_address"].pattern,
     ),
     "min_chars": (
         "中文/混合最短字符",
@@ -126,6 +156,10 @@ class CheckSimApp(ttk.Frame):
         self.sentence_delimiters = tk.StringVar(value=defaults.sentence_delimiters)
         self.soft_delimiters = tk.StringVar(value=defaults.soft_delimiters)
         self.similarity_backend = tk.StringVar(value=defaults.similarity_backend)
+        preset_defaults = default_regex_presets()
+        self.regex_preset_vars = {
+            key: tk.BooleanVar(value=enabled) for key, enabled in preset_defaults.items()
+        }
         self.status = tk.StringVar(value="就绪")
 
         self._build()
@@ -197,17 +231,58 @@ class CheckSimApp(ttk.Frame):
     def _build_keywords_and_options(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="3. 关键词与检测参数")
         frame.pack(fill="x", expand=False)
-        keyword_header = ttk.Frame(frame)
-        keyword_header.pack(fill="x", padx=8, pady=(8, 2))
-        ttk.Label(keyword_header, text="重要关键词/正则，每行一条；正则请用 re: 开头").pack(side=LEFT)
+
+        editors = ttk.Frame(frame)
+        editors.pack(fill="x", padx=8, pady=(8, 8))
+        editors.columnconfigure(0, weight=1)
+        editors.columnconfigure(1, weight=1)
+
+        keyword_panel = ttk.Frame(editors)
+        keyword_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        keyword_header = ttk.Frame(keyword_panel)
+        keyword_header.pack(fill="x", pady=(0, 2))
+        ttk.Label(keyword_header, text="重要关键词，每行一条").pack(side=LEFT)
         ttk.Button(
             keyword_header,
             text="?",
             width=2,
             command=lambda: self._show_param_help("keywords"),
         ).pack(side=LEFT, padx=(6, 0))
-        self.keyword_text = tk.Text(frame, height=4, wrap="word")
-        self.keyword_text.pack(fill="x", padx=8, pady=(0, 8))
+        self.keyword_text = tk.Text(keyword_panel, height=5, wrap="word")
+        self.keyword_text.pack(fill="x")
+
+        regex_panel = ttk.Frame(editors)
+        regex_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        regex_header = ttk.Frame(regex_panel)
+        regex_header.pack(fill="x", pady=(0, 2))
+        ttk.Label(regex_header, text="正则表达式，每行一条").pack(side=LEFT)
+        ttk.Button(
+            regex_header,
+            text="?",
+            width=2,
+            command=lambda: self._show_param_help("regex_keywords"),
+        ).pack(side=LEFT, padx=(6, 0))
+        self.regex_text = tk.Text(regex_panel, height=5, wrap="word")
+        self.regex_text.pack(fill="x")
+
+        preset_grid = ttk.Frame(regex_panel)
+        preset_grid.pack(fill="x", pady=(4, 0))
+        preset_grid.columnconfigure(0, weight=1)
+        preset_grid.columnconfigure(1, weight=1)
+        for index, (preset_key, preset) in enumerate(REGEX_PRESETS.items()):
+            cell = ttk.Frame(preset_grid)
+            cell.grid(row=index // 2, column=index % 2, sticky="w", padx=(0, 4), pady=1)
+            ttk.Checkbutton(
+                cell,
+                text=REGEX_PRESET_UI_LABELS[preset_key],
+                variable=self.regex_preset_vars[preset_key],
+            ).pack(side=LEFT)
+            ttk.Button(
+                cell,
+                text="?",
+                width=2,
+                command=lambda key=preset_key: self._show_param_help(key),
+            ).pack(side=LEFT, padx=(2, 0))
 
         options = ttk.Frame(frame)
         options.pack(fill="x", padx=8, pady=(0, 8))
@@ -225,12 +300,24 @@ class CheckSimApp(ttk.Frame):
         frame = ttk.LabelFrame(parent, text="4. 检测与报告")
         frame.pack(fill="x", pady=(0, 8))
         self.run_button = ttk.Button(frame, text="开始检测", command=self._start_check)
-        self.run_button.pack(side=LEFT, padx=8, pady=10)
-        ttk.Button(frame, text="打开报告", command=self._open_report).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(frame, text="打开输出目录", command=self._open_output_dir).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(frame, text="帮助", command=self._show_help).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(frame, text="保存配置", command=self._save_config).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(frame, text="加载配置", command=self._load_config).pack(side=LEFT, padx=(0, 6))
+        buttons = [
+            self.run_button,
+            ttk.Button(frame, text="打开报告", command=self._open_report),
+            ttk.Button(frame, text="打开输出目录", command=self._open_output_dir),
+            ttk.Button(frame, text="帮助", command=self._show_help),
+            ttk.Button(frame, text="保存配置", command=self._save_config),
+            ttk.Button(frame, text="加载配置", command=self._load_config),
+        ]
+        for index, button in enumerate(buttons):
+            button.grid(
+                row=index // 3,
+                column=index % 3,
+                sticky="ew",
+                padx=(8 if index % 3 == 0 else 0, 8),
+                pady=(8 if index < 3 else 0, 8),
+            )
+        for column in range(3):
+            frame.columnconfigure(column, weight=1)
 
     def _build_log_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="进度日志")
@@ -492,7 +579,9 @@ class CheckSimApp(ttk.Frame):
         if len(self.groups) < 2:
             if require_min_groups:
                 raise ValueError("至少需要添加 2 个投标文件分组。")
-        keywords = [line.strip() for line in self.keyword_text.get("1.0", END).splitlines() if line.strip()]
+        keywords = _text_lines(self.keyword_text)
+        regex_keywords = _text_lines(self.regex_text)
+        regex_presets = {key: bool(variable.get()) for key, variable in self.regex_preset_vars.items()}
         options = {
             "min_chars": _parse_int(self.min_chars.get(), "中文/混合最短字符"),
             "min_words": _parse_int(self.min_words.get(), "英文最短词数"),
@@ -508,6 +597,8 @@ class CheckSimApp(ttk.Frame):
             "groups": [{"name": str(group.get("name", "")), "files": list(group.get("files", []))} for group in self.groups],
             "exclude_files": list(self.exclude_files),
             "keywords": keywords,
+            "regex_keywords": regex_keywords,
+            "regex_presets": regex_presets,
             "options": options,
         }
 
@@ -550,8 +641,17 @@ class CheckSimApp(ttk.Frame):
                 groups.append({"name": str(group.get("name") or f"公司{index}"), "files": files})
         self.groups = groups
         self.exclude_files = [normalize_path(file) for file in raw.get("exclude_files") or []]
+        keywords, regex_keywords = _split_keyword_rules(
+            raw.get("keywords") or [],
+            raw.get("regex_keywords") or [],
+        )
         self.keyword_text.delete("1.0", END)
-        self.keyword_text.insert("1.0", "\n".join(str(item) for item in raw.get("keywords") or []))
+        self.keyword_text.insert("1.0", "\n".join(keywords))
+        self.regex_text.delete("1.0", END)
+        self.regex_text.insert("1.0", "\n".join(regex_keywords))
+        regex_presets = normalize_regex_presets(raw.get("regex_presets"))
+        for key, enabled in regex_presets.items():
+            self.regex_preset_vars[key].set(enabled)
         self._apply_options_to_vars(options)
         self._refresh_groups()
         self._refresh_excludes()
@@ -782,10 +882,13 @@ def _help_text() -> str:
             "2. 如果两家公司相似的片段两侧都能高相似匹配到排除文件，该片段会标为“已排除”。",
             "3. 已排除片段仍会进入报告，颜色更淡，便于复核。",
             "",
-            "四、填写重要关键词/正则",
-            "1. 每行一条规则，例如公司名称、项目经理姓名、手机号或统一社会信用代码。",
-            "2. 普通文本直接写；正则表达式以 re: 开头，例如 re:1[3-9]\\d{9}。",
-            "3. 关键词检测不受短文本过滤影响；同一规则命中 2 个及以上公司/分组会判为异常。",
+            "四、填写重要关键词和正则",
+            "1. 左侧关键词框每行填写一个普通关键词，例如公司名称、法人、项目经理或技术负责人姓名。",
+            "2. 右侧正则框每行填写一个正则表达式，无需添加 re: 前缀。",
+            "3. 中国大陆手机号、中国大陆身份证、邮箱地址和地址预设均默认勾选，可按需要关闭。",
+            "4. 普通关键词跨 2 个及以上分组出现即预警；正则必须匹配到同一个实际内容才预警。",
+            "5. 例如两家公司分别出现不同手机号不会预警，出现同一个手机号才会预警。",
+            "6. 关键词和正则检测均不受短文本过滤影响。",
             "",
             "五、设置参数",
             "1. 中文/混合最短字符：低于该长度的短句不参与相似度比对，默认 10。",
@@ -808,7 +911,7 @@ def _help_text() -> str:
             "",
             "七、命令行与 Skill",
             "1. 命令行入口：python -m checksim.cli --config case.json --output outputs/run_demo。",
-            "2. 配置 JSON 字段包括 groups、exclude_files、keywords、options。",
+            "2. 配置 JSON 字段包括 groups、exclude_files、keywords、regex_keywords、regex_presets、options。",
             "3. Skill 会调用同一套 CLI 和核心算法，适合在 Win/Linux Agent 环境中自动生成配置并运行查重。",
             "4. 所有 HTML 报告的 CSS/JS 均内嵌，适合内网离线打开。",
         ]
@@ -830,6 +933,32 @@ def _parse_float(value: str, label: str) -> float:
     if not 0 < number <= 1:
         raise ValueError(f"{label} 必须在 0 到 1 之间。")
     return number
+
+
+def _text_lines(widget: tk.Text) -> list[str]:
+    return [line.strip() for line in widget.get("1.0", END).splitlines() if line.strip()]
+
+
+def _split_keyword_rules(keyword_values: object, regex_values: object) -> tuple[list[str], list[str]]:
+    keywords: list[str] = []
+    regex_keywords: list[str] = []
+    for value in (keyword_values if isinstance(keyword_values, list) else []):
+        text = str(value).strip()
+        if not text:
+            continue
+        if text.startswith("re:"):
+            pattern = text[3:].strip()
+            if pattern:
+                regex_keywords.append(pattern)
+        else:
+            keywords.append(text)
+    for value in (regex_values if isinstance(regex_values, list) else []):
+        text = str(value).strip()
+        if text.startswith("re:"):
+            text = text[3:].strip()
+        if text:
+            regex_keywords.append(text)
+    return keywords, list(dict.fromkeys(regex_keywords))
 
 
 def _open_path(path: str) -> None:

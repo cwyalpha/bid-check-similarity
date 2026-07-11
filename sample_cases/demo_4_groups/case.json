@@ -34,6 +34,13 @@
     "北辰",
     "青禾"
   ],
+  "regex_keywords": [],
+  "regex_presets": {
+    "china_mobile": true,
+    "china_id_card": true,
+    "email": true,
+    "china_address": true
+  },
   "options": {
     "min_chars": 10,
     "min_words": 8,

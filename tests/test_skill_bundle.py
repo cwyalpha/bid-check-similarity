@@ -106,6 +106,53 @@ class SkillBundleTest(unittest.TestCase):
             summary = json.loads((output_dir / "ai_summary.json").read_text(encoding="utf-8"))
             self.assertGreaterEqual(summary["stats"]["similar_match_count"], 1)
 
+    def test_skill_reports_only_shared_regex_values(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        source_skill = repo_root / "skills" / "bid-check-similarity"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundled_skill = root / "bid-check-similarity"
+            shutil.copytree(source_skill, bundled_skill, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+            groups = []
+            for name, mobile in (("A公司", "13800138000"), ("B公司", "13900139000"), ("C公司", "13800138000")):
+                path = root / f"{name}.txt"
+                path.write_text(f"项目联系人手机号码为{mobile}。", encoding="utf-8")
+                groups.append({"name": name, "files": [str(path)]})
+            config_path = root / "case.json"
+            config_path.write_text(
+                json.dumps({"groups": groups}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            output_dir = root / "outputs"
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(bundled_skill / "scripts" / "run_check.py"),
+                    "--config",
+                    str(config_path),
+                    "--output",
+                    str(output_dir),
+                    "--quiet",
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            summary = json.loads((output_dir / "ai_summary.json").read_text(encoding="utf-8"))
+            mobile_alerts = [
+                alert
+                for alert in summary["evidence"]["keyword_alerts"]
+                if alert["keyword"] == "中国大陆手机号（预设）"
+            ]
+            self.assertEqual(len(mobile_alerts), 1)
+            self.assertEqual(mobile_alerts[0]["matched_text"], "13800138000")
+            self.assertEqual(mobile_alerts[0]["groups"], ["A公司", "C公司"])
+
     def test_skill_rejects_pdf_without_loading_ocr_stack(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         source_skill = repo_root / "skills" / "bid-check-similarity"

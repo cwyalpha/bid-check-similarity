@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from .keyword_rules import REGEX_PRESETS, normalize_regex_presets
 from .models import (
     CheckOptions,
     DocumentData,
@@ -55,7 +56,9 @@ def _resolve_config_path(value: object, base_dir: Path) -> str:
     return str((base_dir / path).resolve())
 
 
-def normalize_config(config: dict[str, Any]) -> tuple[list[InputGroup], list[str], list[str], CheckOptions]:
+def normalize_config(
+    config: dict[str, Any],
+) -> tuple[list[InputGroup], list[str], list[str], list[str], dict[str, bool], CheckOptions]:
     groups: list[InputGroup] = []
     for index, raw_group in enumerate(config.get("groups") or [], start=1):
         name = str(raw_group.get("name") or f"公司{index}").strip()
@@ -65,9 +68,28 @@ def normalize_config(config: dict[str, Any]) -> tuple[list[InputGroup], list[str
     if len(groups) < 2:
         raise ValueError("至少需要导入 2 组投标文件。")
     exclude_files = [normalize_path(file) for file in config.get("exclude_files") or []]
-    keywords = [str(item).strip() for item in config.get("keywords") or [] if str(item).strip()]
+    keywords: list[str] = []
+    regex_keywords: list[str] = []
+    for item in config.get("keywords") or []:
+        value = str(item).strip()
+        if not value:
+            continue
+        if value.startswith("re:"):
+            pattern = value[3:].strip()
+            if pattern:
+                regex_keywords.append(pattern)
+        else:
+            keywords.append(value)
+    for item in config.get("regex_keywords") or []:
+        value = str(item).strip()
+        if value.startswith("re:"):
+            value = value[3:].strip()
+        if value:
+            regex_keywords.append(value)
+    regex_keywords = list(dict.fromkeys(regex_keywords))
+    regex_presets = normalize_regex_presets(config.get("regex_presets"))
     options = CheckOptions.from_dict(config.get("options") or {})
-    return groups, exclude_files, keywords, options
+    return groups, exclude_files, keywords, regex_keywords, regex_presets, options
 
 
 def run_check(
@@ -78,7 +100,7 @@ def run_check(
     progress = progress or (lambda message: None)
     run_started = time.perf_counter()
     stage_seconds: dict[str, float] = {}
-    groups, exclude_files, keywords, options = normalize_config(config)
+    groups, exclude_files, keywords, regex_keywords, regex_presets, options = normalize_config(config)
 
     progress("正在解析投标文件...")
     stage_started = time.perf_counter()
@@ -100,7 +122,12 @@ def run_check(
 
     progress("正在检测重要关键词和正则...")
     stage_started = time.perf_counter()
-    keyword_alerts, keyword_errors = _detect_keyword_alerts(documents, keywords)
+    keyword_alerts, keyword_errors = _detect_keyword_alerts(
+        documents,
+        keywords,
+        regex_keywords,
+        regex_presets,
+    )
     stage_seconds["keywords"] = round(time.perf_counter() - stage_started, 3)
 
     progress("正在检测图片重复...")
@@ -112,6 +139,8 @@ def run_check(
         groups=groups,
         exclude_files=exclude_files,
         keywords=keywords,
+        regex_keywords=regex_keywords,
+        regex_presets=regex_presets,
         options=options,
         documents=documents,
         exclude_documents=exclude_documents,
@@ -305,26 +334,53 @@ class _ExcludeIndex:
         return result
 
 
-def _detect_keyword_alerts(documents: list[DocumentData], keywords: list[str]) -> tuple[list[KeywordAlert], list[str]]:
+def _detect_keyword_alerts(
+    documents: list[DocumentData],
+    keywords: list[str],
+    regex_keywords: list[str] | None = None,
+    regex_presets: dict[str, bool] | None = None,
+) -> tuple[list[KeywordAlert], list[str]]:
     import re
 
     alerts: list[KeywordAlert] = []
     errors: list[str] = []
+    rules: list[tuple[str, str, bool]] = []
     for keyword in keywords:
-        is_regex = keyword.startswith("re:")
-        pattern_text = keyword[3:] if is_regex else re.escape(keyword)
+        if keyword.startswith("re:"):
+            rules.append((keyword, keyword[3:], True))
+        else:
+            rules.append((keyword, re.escape(keyword), False))
+    for regex_keyword in regex_keywords or []:
+        pattern_text = regex_keyword[3:] if regex_keyword.startswith("re:") else regex_keyword
+        rules.append((pattern_text, pattern_text, True))
+    enabled_presets = normalize_regex_presets(regex_presets)
+    for preset_key, enabled in enabled_presets.items():
+        if enabled:
+            preset = REGEX_PRESETS[preset_key]
+            rules.append((f"{preset.label}（预设）", preset.pattern, True))
+
+    seen_rules: set[tuple[str, bool]] = set()
+    for keyword, pattern_text, is_regex in rules:
+        rule_key = (pattern_text, is_regex)
+        if rule_key in seen_rules:
+            continue
+        seen_rules.add(rule_key)
         try:
             pattern = re.compile(pattern_text, flags=re.IGNORECASE)
         except re.error as exc:
             errors.append(f"{keyword}: {exc}")
             continue
-        hits: list[KeywordHit] = []
+        hits_by_value: dict[str, list[KeywordHit]] = defaultdict(list)
+        display_values: dict[str, str] = {}
         for doc in documents:
             full_text = doc.full_text
             for hit_index, match in enumerate(pattern.finditer(full_text), start=1):
-                if hit_index > 100:
-                    break
-                hits.append(
+                matched_text = match.group(0)
+                if not matched_text.strip():
+                    continue
+                canonical_value = matched_text if is_regex else keyword.casefold()
+                display_values.setdefault(canonical_value, matched_text)
+                hits_by_value[canonical_value].append(
                     KeywordHit(
                         keyword=keyword,
                         is_regex=is_regex,
@@ -333,11 +389,23 @@ def _detect_keyword_alerts(documents: list[DocumentData], keywords: list[str]) -
                         file_name=doc.file_name,
                         location=f"命中{hit_index}",
                         snippet=make_snippet(full_text, match.start(), match.end()),
+                        matched_text=matched_text,
+                        pattern=pattern_text,
                     )
                 )
-        groups = sorted({hit.group_name for hit in hits})
-        if len(groups) >= 2:
-            alerts.append(KeywordAlert(keyword=keyword, is_regex=is_regex, groups=groups, hits=hits))
+        for canonical_value, hits in hits_by_value.items():
+            groups = sorted({hit.group_name for hit in hits})
+            if len(groups) >= 2:
+                alerts.append(
+                    KeywordAlert(
+                        keyword=keyword,
+                        is_regex=is_regex,
+                        groups=groups,
+                        hits=hits,
+                        matched_text=display_values[canonical_value],
+                        pattern=pattern_text,
+                    )
+                )
     return alerts, errors
 
 
@@ -402,6 +470,8 @@ def _build_result(
     groups: list[InputGroup],
     exclude_files: list[str],
     keywords: list[str],
+    regex_keywords: list[str],
+    regex_presets: dict[str, bool],
     options: CheckOptions,
     documents: list[DocumentData],
     exclude_documents: list[DocumentData],
@@ -421,6 +491,8 @@ def _build_result(
             "groups": [{"name": group.name, "files": group.files} for group in groups],
             "exclude_files": exclude_files,
             "keywords": keywords,
+            "regex_keywords": regex_keywords,
+            "regex_presets": regex_presets,
         },
         "options": options.to_dict(),
         "stats": {

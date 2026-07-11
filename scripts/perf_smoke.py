@@ -98,7 +98,14 @@ def _generate_case(work_dir: Path, group_count: int, chars_per_file: int) -> Pat
     config = {
         "groups": groups,
         "exclude_files": [str(exclude_path)],
-        "keywords": ["华远智联科技有限公司", "re:每日巡检|月度运行分析"],
+        "keywords": ["华远智联科技有限公司"],
+        "regex_keywords": ["每日巡检|月度运行分析"],
+        "regex_presets": {
+            "china_mobile": True,
+            "china_id_card": True,
+            "email": True,
+            "china_address": True,
+        },
         "options": {
             "min_chars": 10,
             "min_words": 8,
