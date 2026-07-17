@@ -16,6 +16,7 @@
 
 - `BidCheckSimilarity-v0.2.7-macOS-arm64.zip`
 - Apple Silicon 原生应用，包含 PDF 文本解析和扫描 PDF PP-OCRv6 medium OCR 能力。
+- 应用包内部版本号与 Release 版本保持一致。
 
 ### Windows 版本
 

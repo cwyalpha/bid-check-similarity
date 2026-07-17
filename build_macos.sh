@@ -97,6 +97,15 @@ PYINSTALLER_ARGS+=(run_app.py)
 
 python -m PyInstaller "${PYINSTALLER_ARGS[@]}"
 
+INFO_PLIST="dist/${APP_NAME}.app/Contents/Info.plist"
+if ! /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${INFO_PLIST}"; then
+  /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${VERSION}" "${INFO_PLIST}"
+fi
+if ! /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "${INFO_PLIST}"; then
+  /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${VERSION}" "${INFO_PLIST}"
+fi
+codesign --force --deep --sign - "dist/${APP_NAME}.app"
+
 rm -f "release/${ASSET_NAME}"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "dist/${APP_NAME}.app" "release/${ASSET_NAME}"
 
