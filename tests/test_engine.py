@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -225,6 +228,83 @@ class CheckSimEngineTest(unittest.TestCase):
 
             parsed = parse_file(path, "测试组", 0, CheckOptions())
             self.assertTrue(any("三年驻场运维服务" in block for block in parsed.blocks))
+
+    def test_metadata_collisions_are_reported_across_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            left = root / "A公司.docx"
+            right = root / "B公司.docx"
+            _make_docx(
+                left,
+                ["甲方投标文件中的独立技术方案。"],
+                None,
+                author="张三",
+                last_modified_by="李四",
+                company="共同制作单位",
+                created=datetime(2026, 7, 17, 10, 30, 5),
+                modified=datetime(2026, 7, 17, 11, 45, 10),
+            )
+            _make_docx(
+                right,
+                ["乙方投标文件中的不同实施安排。"],
+                None,
+                author="张三",
+                last_modified_by="李四",
+                company="共同制作单位",
+                created=datetime(2026, 7, 17, 10, 30, 50),
+                modified=datetime(2026, 7, 17, 11, 45, 40),
+            )
+
+            result = run_check(
+                {
+                    "groups": [
+                        {"name": "A公司", "files": [str(left)]},
+                        {"name": "B公司", "files": [str(right)]},
+                    ],
+                    "options": {"min_chars": 10, "similarity_threshold": 1.0},
+                },
+                root / "outputs",
+            )
+
+            alerts = {(alert["field"], alert["value"]): alert for alert in result["metadata_alerts"]}
+            self.assertEqual(alerts[("author", "张三")]["level"], "高")
+            self.assertEqual(alerts[("company", "共同制作单位")]["level"], "高")
+            self.assertEqual(alerts[("last_modified_by", "李四")]["level"], "中")
+            self.assertTrue(any(field == "created" for field, _value in alerts))
+            self.assertTrue(any(field == "modified" for field, _value in alerts))
+            self.assertEqual(result["stats"]["metadata_alert_count"], 5)
+            self.assertEqual(result["documents"][0]["metadata"]["company"], "共同制作单位")
+
+            report_html = Path(result["output_files"]["report_html"]).read_text(encoding="utf-8")
+            self.assertIn("文档元数据碰撞预警", report_html)
+            self.assertIn("共同制作单位", report_html)
+
+            summary = json.loads(Path(result["output_files"]["ai_summary_json"]).read_text(encoding="utf-8"))
+            self.assertEqual(summary["stats"]["metadata_alert_count"], 5)
+            self.assertEqual(len(summary["evidence"]["metadata_alerts"]), 5)
+            self.assertEqual(summary["evidence"]["metadata_alerts"][0]["groups"], ["A公司", "B公司"])
+
+    def test_metadata_collisions_ignore_same_group_and_generic_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            left_a = root / "A-1.docx"
+            left_b = root / "A-2.docx"
+            right = root / "B.docx"
+            _make_docx(left_a, ["甲方文件一。"], None, author="仅同组作者")
+            _make_docx(left_b, ["甲方文件二。"], None, author="仅同组作者")
+            _make_docx(right, ["乙方文件。"], None, author="Administrator")
+
+            result = run_check(
+                {
+                    "groups": [
+                        {"name": "A公司", "files": [str(left_a), str(left_b)]},
+                        {"name": "B公司", "files": [str(right)]},
+                    ]
+                },
+                root / "outputs",
+            )
+
+            self.assertFalse(any(alert["field"] == "author" for alert in result["metadata_alerts"]))
 
     def test_load_config_resolves_paths_relative_to_config_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -498,13 +578,48 @@ class CheckSimEngineTest(unittest.TestCase):
         self.assertEqual(_paddleocr_result_blocks(raw), ["第1页: Legacy OCR text"])
 
 
-def _make_docx(path: Path, paragraphs: list[str], image_path: Path | None) -> None:
+def _make_docx(
+    path: Path,
+    paragraphs: list[str],
+    image_path: Path | None,
+    *,
+    author: str = "",
+    last_modified_by: str = "",
+    company: str = "",
+    created: datetime | None = None,
+    modified: datetime | None = None,
+) -> None:
     doc = Document()
+    doc.core_properties.author = author
+    doc.core_properties.last_modified_by = last_modified_by
+    if created is not None:
+        doc.core_properties.created = created
+    if modified is not None:
+        doc.core_properties.modified = modified
     for paragraph in paragraphs:
         doc.add_paragraph(paragraph)
     if image_path is not None:
         doc.add_picture(str(image_path))
     doc.save(path)
+    if company:
+        _set_docx_company(path, company)
+
+
+def _set_docx_company(path: Path, company: str) -> None:
+    replacement = path.with_name(path.stem + "-company.docx")
+    namespace = "{http://schemas.openxmlformats.org/officeDocument/2006/extended-properties}"
+    with zipfile.ZipFile(path) as source, zipfile.ZipFile(replacement, "w", zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            payload = source.read(item.filename)
+            if item.filename == "docProps/app.xml":
+                root = ET.fromstring(payload)
+                element = root.find(f"{namespace}Company")
+                if element is None:
+                    element = ET.SubElement(root, f"{namespace}Company")
+                element.text = company
+                payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+            target.writestr(item, payload)
+    replacement.replace(path)
 
 
 def _make_pdf(path: Path, text: str) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,8 @@ from .models import (
     InputGroup,
     KeywordAlert,
     KeywordHit,
+    MetadataAlert,
+    MetadataHit,
     SimilarityMatch,
     TextUnit,
     normalize_path,
@@ -28,6 +31,31 @@ Progress = Callable[[str], None]
 _TEXT_RECALL_SHARED_RATIO = 0.12
 _EXCLUDE_RECALL_LIMIT = 80
 _TEXT_RECALL_LENGTH_FLOOR = 0.55
+
+_METADATA_EXACT_RULES = (
+    ("author", "作者", "高", "不同分组文档的作者元数据相同"),
+    ("company", "公司", "高", "不同分组文档的公司元数据相同"),
+    ("last_modified_by", "最后修改者", "中", "不同分组文档的最后修改者元数据相同"),
+)
+_METADATA_TIME_RULES = (
+    ("created", "创建时间", "中", "不同分组文档的内部创建时间处于同一分钟"),
+    ("modified", "修改时间", "中", "不同分组文档的内部修改时间处于同一分钟"),
+)
+_IGNORED_METADATA_VALUES = {
+    "admin",
+    "administrator",
+    "default",
+    "kingsoft office",
+    "microsoft corporation",
+    "microsoft office user",
+    "n/a",
+    "none",
+    "python-docx",
+    "unknown",
+    "user",
+    "wps office",
+}
+_IGNORED_METADATA_MINUTES = {"2013-12-23 23:15"}
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -130,6 +158,11 @@ def run_check(
     )
     stage_seconds["keywords"] = round(time.perf_counter() - stage_started, 3)
 
+    progress("正在检测文档元数据碰撞...")
+    stage_started = time.perf_counter()
+    metadata_alerts = _detect_metadata_alerts(documents)
+    stage_seconds["metadata"] = round(time.perf_counter() - stage_started, 3)
+
     progress("正在检测图片重复...")
     stage_started = time.perf_counter()
     image_duplicates = _detect_image_duplicates(documents, options)
@@ -147,6 +180,7 @@ def run_check(
         matches=matches,
         keyword_alerts=keyword_alerts,
         keyword_errors=keyword_errors,
+        metadata_alerts=metadata_alerts,
         image_duplicates=image_duplicates,
     )
     result["performance"] = {
@@ -409,6 +443,109 @@ def _detect_keyword_alerts(
     return alerts, errors
 
 
+def _detect_metadata_alerts(documents: list[DocumentData]) -> list[MetadataAlert]:
+    alerts: list[MetadataAlert] = []
+    for field, label, level, reason in _METADATA_EXACT_RULES:
+        alerts.extend(_metadata_value_alerts(documents, field, label, level, reason))
+    for field, label, level, reason in _METADATA_TIME_RULES:
+        alerts.extend(_metadata_time_alerts(documents, field, label, level, reason))
+    return sorted(alerts, key=lambda item: (0 if item.level == "高" else 1, item.label, item.value))
+
+
+def _metadata_value_alerts(
+    documents: list[DocumentData],
+    field: str,
+    label: str,
+    level: str,
+    reason: str,
+) -> list[MetadataAlert]:
+    hits_by_value: dict[str, list[MetadataHit]] = defaultdict(list)
+    display_values: dict[str, str] = {}
+    for doc in documents:
+        raw_value = str(doc.metadata.get(field) or "").strip()
+        normalized = _normalize_metadata_value(raw_value)
+        if not normalized or normalized in _IGNORED_METADATA_VALUES:
+            continue
+        display_values.setdefault(normalized, raw_value[:200])
+        hits_by_value[normalized].append(_metadata_hit(doc, raw_value[:200]))
+    return _metadata_alerts_from_hits(field, label, level, reason, hits_by_value, display_values)
+
+
+def _metadata_time_alerts(
+    documents: list[DocumentData],
+    field: str,
+    label: str,
+    level: str,
+    reason: str,
+) -> list[MetadataAlert]:
+    hits_by_value: dict[str, list[MetadataHit]] = defaultdict(list)
+    display_values: dict[str, str] = {}
+    for doc in documents:
+        raw_value = str(doc.metadata.get(field) or "").strip()
+        minute_key = _metadata_minute_key(raw_value)
+        if not minute_key or minute_key in _IGNORED_METADATA_MINUTES:
+            continue
+        display_values[minute_key] = f"{minute_key}（同一分钟）"
+        hits_by_value[minute_key].append(_metadata_hit(doc, raw_value[:200]))
+    return _metadata_alerts_from_hits(field, label, level, reason, hits_by_value, display_values)
+
+
+def _metadata_alerts_from_hits(
+    field: str,
+    label: str,
+    level: str,
+    reason: str,
+    hits_by_value: dict[str, list[MetadataHit]],
+    display_values: dict[str, str],
+) -> list[MetadataAlert]:
+    alerts: list[MetadataAlert] = []
+    for normalized, hits in hits_by_value.items():
+        groups = sorted({hit.group_name for hit in hits})
+        if len(groups) < 2:
+            continue
+        alerts.append(
+            MetadataAlert(
+                field=field,
+                label=label,
+                level=level,
+                value=display_values[normalized],
+                groups=groups,
+                hits=hits,
+                reason=reason,
+            )
+        )
+    return alerts
+
+
+def _metadata_hit(doc: DocumentData, value: str) -> MetadataHit:
+    return MetadataHit(
+        group_name=doc.group_name,
+        file_path=doc.file_path,
+        file_name=doc.file_name,
+        value=value,
+    )
+
+
+def _normalize_metadata_value(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    return " ".join(normalized.split()).casefold()
+
+
+def _metadata_minute_key(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    if text.startswith("D:"):
+        digits = "".join(character for character in text[2:] if character.isdigit())
+        if len(digits) >= 12:
+            return f"{digits[0:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return parsed.strftime("%Y-%m-%d %H:%M")
+
+
 def _detect_image_duplicates(documents: list[DocumentData], options: CheckOptions) -> list[ImageDuplicate]:
     image_items: list[dict[str, Any]] = []
     for doc in documents:
@@ -478,6 +615,7 @@ def _build_result(
     matches: list[SimilarityMatch],
     keyword_alerts: list[KeywordAlert],
     keyword_errors: list[str],
+    metadata_alerts: list[MetadataAlert],
     image_duplicates: list[ImageDuplicate],
 ) -> dict[str, Any]:
     summaries = _pair_summaries(matches, groups)
@@ -512,6 +650,7 @@ def _build_result(
             "truncated_excluded_match_count": 0,
             "match_truncated": False,
             "keyword_alert_count": len(keyword_alerts),
+            "metadata_alert_count": len(metadata_alerts),
             "image_duplicate_count": len(image_duplicates),
         },
         "documents": [_document_summary(doc) for doc in documents],
@@ -520,6 +659,7 @@ def _build_result(
         "matches": [match.to_dict() for match in matches],
         "keyword_alerts": [alert.to_dict() for alert in keyword_alerts],
         "keyword_errors": keyword_errors,
+        "metadata_alerts": [alert.to_dict() for alert in metadata_alerts],
         "image_duplicates": [duplicate.to_dict() for duplicate in image_duplicates],
     }
 

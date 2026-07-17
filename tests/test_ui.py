@@ -142,12 +142,14 @@ class CheckSimUiTest(unittest.TestCase):
                 "stats": {
                     "similar_match_count": 8,
                     "excluded_match_count": 3,
+                    "metadata_alert_count": 2,
                 },
                 "output_files": {"output_dir": "outputs/run_test"},
             }
         )
         self.assertIn("异常片段：8", message)
         self.assertIn("已排除片段：3", message)
+        self.assertIn("元数据预警：2", message)
         self.assertNotIn("all_matches.jsonl", message)
 
     def test_open_path_uses_macos_open(self) -> None:

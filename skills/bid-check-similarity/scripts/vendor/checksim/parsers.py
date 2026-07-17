@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -92,7 +94,7 @@ def _parse_docx(
             if cells:
                 blocks.append(f"表{table_index} 行{row_index}: " + " | ".join(cells))
 
-    metadata = _docx_metadata(document, display_path)
+    metadata = _docx_metadata(document, display_path, path)
     if source_path is not None:
         metadata["converted_from"] = source_path.suffix.lower()
         metadata["converted_via"] = "docx"
@@ -154,7 +156,7 @@ def _build_units(path: Path, group_name: str, group_index: int, blocks: list[str
     return units
 
 
-def _docx_metadata(document: Document, path: Path) -> dict[str, Any]:
+def _docx_metadata(document: Document, path: Path, package_path: Path) -> dict[str, Any]:
     props = document.core_properties
     metadata = _file_metadata(path)
     metadata.update(
@@ -168,6 +170,23 @@ def _docx_metadata(document: Document, path: Path) -> dict[str, Any]:
             "subject": props.subject or "",
         }
     )
+    metadata.update(_docx_extended_metadata(package_path))
+    return metadata
+
+
+def _docx_extended_metadata(path: Path) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            root = ET.fromstring(archive.read("docProps/app.xml"))
+    except (KeyError, OSError, ET.ParseError, zipfile.BadZipFile):
+        return metadata
+
+    namespace = "{http://schemas.openxmlformats.org/officeDocument/2006/extended-properties}"
+    for xml_name, output_name in (("Company", "company"), ("Manager", "manager")):
+        element = root.find(f"{namespace}{xml_name}")
+        if element is not None and element.text and element.text.strip():
+            metadata[output_name] = element.text.strip()
     return metadata
 
 

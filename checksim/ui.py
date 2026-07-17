@@ -851,6 +851,7 @@ def _completion_message(result: object) -> str:
         f"输出目录：{output_files.get('output_dir', '')}",
         f"异常片段：{stats.get('similar_match_count', 0)}",
         f"已排除片段：{stats.get('excluded_match_count', 0)}",
+        f"元数据预警：{stats.get('metadata_alert_count', 0)}",
     ]
     return "\n".join(lines)
 

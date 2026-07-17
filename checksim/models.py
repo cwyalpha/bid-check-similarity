@@ -271,6 +271,44 @@ class KeywordAlert:
 
 
 @dataclass
+class MetadataHit:
+    group_name: str
+    file_path: str
+    file_name: str
+    value: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "group_name": self.group_name,
+            "file_path": self.file_path,
+            "file_name": self.file_name,
+            "value": self.value,
+        }
+
+
+@dataclass
+class MetadataAlert:
+    field: str
+    label: str
+    level: str
+    value: str
+    groups: list[str]
+    hits: list[MetadataHit]
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "field": self.field,
+            "label": self.label,
+            "level": self.level,
+            "value": self.value,
+            "groups": self.groups,
+            "hits": [hit.to_dict() for hit in self.hits],
+            "reason": self.reason,
+        }
+
+
+@dataclass
 class ImageDuplicate:
     kind: str
     distance: int

@@ -45,7 +45,7 @@ def build_ai_summary(result: dict[str, Any]) -> dict[str, Any]:
     excluded_matches = [match for match in matches if match.get("excluded")]
     return {
         "schema": "checksim.ai_summary.v1",
-        "purpose": "供 AI/Agent 快速判断是否存在疑似重复、共享关键词或重复图片；完整结果见 result.json，人工复核见 report.html 和 compare_*.html。",
+        "purpose": "供 AI/Agent 快速判断是否存在疑似重复、共享关键词、元数据碰撞或重复图片；完整结果见 result.json，人工复核见 report.html 和 compare_*.html。",
         "generated_at": result.get("generated_at", ""),
         "stats": _ai_stats(result),
         "output_files": _ai_output_files(result),
@@ -55,6 +55,7 @@ def build_ai_summary(result: dict[str, Any]) -> dict[str, Any]:
             "similar_text": _ai_match_samples(active_matches, result, per_pair_limit=20, total_limit=160),
             "excluded_text": _ai_match_samples(excluded_matches, result, per_pair_limit=8, total_limit=80),
             "keyword_alerts": _ai_keyword_alerts(result),
+            "metadata_alerts": _ai_metadata_alerts(result),
             "image_duplicates": _ai_image_duplicates(result),
         },
         "limits": {
@@ -63,6 +64,7 @@ def build_ai_summary(result: dict[str, Any]) -> dict[str, Any]:
             "excluded_text_per_pair": 8,
             "excluded_text_total": 80,
             "keyword_hits_per_rule": 10,
+            "metadata_hits_per_alert": 10,
             "image_duplicate_groups": 30,
             "text_chars_per_side": 320,
         },
@@ -81,9 +83,11 @@ def _ai_stats(result: dict[str, Any]) -> dict[str, Any]:
         "similar_match_count": stats.get("similar_match_count", 0),
         "excluded_match_count": stats.get("excluded_match_count", 0),
         "keyword_alert_count": stats.get("keyword_alert_count", 0),
+        "metadata_alert_count": stats.get("metadata_alert_count", 0),
         "image_duplicate_count": stats.get("image_duplicate_count", 0),
         "has_abnormal_similarity": bool(stats.get("similar_match_count", 0)),
         "has_keyword_alerts": bool(stats.get("keyword_alert_count", 0)),
+        "has_metadata_alerts": bool(stats.get("metadata_alert_count", 0)),
         "has_image_duplicates": bool(stats.get("image_duplicate_count", 0)),
     }
 
@@ -207,6 +211,33 @@ def _ai_keyword_alerts(result: dict[str, Any]) -> list[dict[str, Any]]:
     return alerts
 
 
+def _ai_metadata_alerts(result: dict[str, Any]) -> list[dict[str, Any]]:
+    alerts = []
+    for alert in result.get("metadata_alerts", []):
+        hits = alert.get("hits", [])
+        alerts.append(
+            {
+                "field": alert.get("field", ""),
+                "label": alert.get("label", ""),
+                "level": alert.get("level", ""),
+                "value": alert.get("value", ""),
+                "groups": alert.get("groups", []),
+                "reason": alert.get("reason", ""),
+                "hit_count": len(hits),
+                "sample_hits": [
+                    {
+                        "group_name": hit.get("group_name", ""),
+                        "file_name": hit.get("file_name", ""),
+                        "value": hit.get("value", ""),
+                    }
+                    for hit in hits[:10]
+                ],
+                "omitted_hit_count": max(0, len(hits) - 10),
+            }
+        )
+    return alerts
+
+
 def _ai_image_duplicates(result: dict[str, Any]) -> dict[str, Any]:
     duplicates = result.get("image_duplicates", [])
     samples = []
@@ -262,6 +293,7 @@ def render_report(result: dict[str, Any]) -> str:
             _options(result),
             _pair_summary(result),
             _keyword_section(result),
+            _metadata_section(result),
             _image_section(result),
             _match_details(result),
             "</main>",
@@ -299,6 +331,7 @@ def _stats(result: dict[str, Any]) -> str:
         ("异常片段", stats.get("similar_match_count", 0)),
         ("已排除片段", stats.get("excluded_match_count", 0)),
         ("关键词异常", stats.get("keyword_alert_count", 0)),
+        ("元数据预警", stats.get("metadata_alert_count", 0)),
         ("图片重复", stats.get("image_duplicate_count", 0)),
     ]
     cards = "".join(f'<div class="stat"><b>{escape(str(value))}</b><span>{escape(label)}</span></div>' for label, value in items)
@@ -314,6 +347,7 @@ def _run_summary(result: dict[str, Any]) -> str:
         ("总耗时", f"{performance.get('engine_seconds', 0)} 秒"),
         ("解析投标文件", f"{stage.get('parse_documents', 0)} 秒"),
         ("相似度计算", f"{stage.get('similarity', 0)} 秒"),
+        ("元数据检测", f"{stage.get('metadata', 0)} 秒"),
         ("报告生成", f"{stage.get('report', 0)} 秒"),
         ("总览报告", output_files.get("report_html", "")),
         ("AI 精简结果", output_files.get("ai_summary_json", "")),
@@ -426,6 +460,38 @@ def _keyword_section(result: dict[str, Any]) -> str:
   {error_html}
   <table>
     <thead><tr><th>序号</th><th>规则</th><th>类型</th><th>重复内容</th><th>命中组</th><th>命中数</th><th>样例</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+</section>
+"""
+
+
+def _metadata_section(result: dict[str, Any]) -> str:
+    rows = []
+    for index, alert in enumerate(result.get("metadata_alerts", []), start=1):
+        hits = alert.get("hits", [])
+        documents = "<br>".join(
+            f"{escape(hit.get('group_name', ''))} / {escape(hit.get('file_name', ''))}: {escape(hit.get('value', ''))}"
+            for hit in hits[:8]
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td><strong>{escape(alert.get('level', ''))}</strong></td>"
+            f"<td>{escape(alert.get('label', ''))}</td>"
+            f"<td class='snippet'>{escape(alert.get('value', ''))}</td>"
+            f"<td>{escape(', '.join(alert.get('groups', [])))}</td>"
+            f"<td class='snippet'>{documents}</td>"
+            f"<td>{escape(alert.get('reason', ''))}</td>"
+            "</tr>"
+        )
+    body = "".join(rows) or "<tr><td colspan='7' class='empty'>未发现跨组文档元数据碰撞。</td></tr>"
+    return f"""
+<section class="panel">
+  <h2>文档元数据碰撞预警</h2>
+  <p class="muted">比较不同分组文档的作者、公司、最后修改者及文档内部创建/修改时间；通用 Office/WPS 默认值会被忽略。此项仅用于风险提示，需结合正文和原始文件人工复核。</p>
+  <table>
+    <thead><tr><th>序号</th><th>风险</th><th>字段</th><th>碰撞值</th><th>涉及组</th><th>文档</th><th>说明</th></tr></thead>
     <tbody>{body}</tbody>
   </table>
 </section>
